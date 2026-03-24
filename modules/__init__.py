@@ -1,0 +1,1 @@
+"""Modules fonctionnels de LumensMaster : faders, patch, séquenceur, etc."""

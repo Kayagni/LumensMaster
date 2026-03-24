@@ -1,0 +1,1 @@
+"""Vues de l'interface graphique LumensMaster."""

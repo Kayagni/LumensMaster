@@ -1,0 +1,13 @@
+# LumensMaster - Dépendances Python
+# Installation : pip install -r requirements.txt
+
+# Interface graphique
+dearpygui>=1.11
+
+# DMX / Port série (OpenDMX via FTDI)
+pyserial>=3.5
+
+# Les dépendances suivantes seront ajoutées dans les phases ultérieures :
+# python-rtmidi     # MIDI (Phase 3)
+# miniaudio         # Audio (Phase 3)
+# pyinstaller       # Distribution .exe
