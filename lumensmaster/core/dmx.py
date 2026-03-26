@@ -1,13 +1,13 @@
 """
-Module de sortie DMX512 via OpenDMX (FTDI).
+Module de sortie DMX512 via OpenDMX (FTDI FT232).
 
-L'OpenDMX utilise un chip FTDI (FT232R) pour convertir l'USB en signal DMX512.
-Le protocole DMX512 consiste à envoyer un break signal suivi d'un start code (0x00)
-puis de 512 octets de données de canaux, à une cadence de ~40 Hz.
+Utilise l'API D2XX native de FTDI (via le package ftd2xx) pour un contrôle
+fiable du timing DMX, en particulier le break signal.
 
 Prérequis :
-    - Driver FTDI VCP installé (Virtual COM Port)
-    - L'interface OpenDMX apparaît comme un port COM sous Windows
+    - Driver FTDI D2XX installé (inclus dans le combined driver)
+    - Le VCP doit être désactivé pour que D2XX puisse accéder au chip
+    - pip install ftd2xx
 """
 
 from __future__ import annotations
@@ -22,32 +22,22 @@ logger = logging.getLogger(__name__)
 # Constantes DMX512
 DMX_CHANNELS = 512
 DMX_BAUDRATE = 250000
-DMX_BREAK_RATE = 76800     # Baud rate utilisé pour simuler le break
-DMX_BREAK_BYTE = b"\x00"   # Octet envoyé au break rate pour générer le break
-DMX_START_CODE = b"\x00"   # Start code standard DMX
-DMX_DEFAULT_FPS = 40       # Fréquence de rafraîchissement par défaut
+DMX_START_CODE = b"\x00"
+DMX_DEFAULT_FPS = 40
+
+# Timing DMX512 (en secondes)
+DMX_BREAK_DURATION = 0.000100    # Break >= 88us, on utilise 100us
+DMX_MAB_DURATION = 0.000012      # Mark After Break >= 8us, on utilise 12us
 
 
 class DMXBuffer:
-    """
-    Buffer partagé de 512 canaux DMX (thread-safe).
-    
-    Les modules écrivent dans ce buffer, le thread DMX le lit
-    et l'envoie à l'interface à chaque cycle.
-    """
+    """Buffer partagé de 512 canaux DMX (thread-safe)."""
 
     def __init__(self) -> None:
         self._data = bytearray(DMX_CHANNELS)
         self._lock = threading.Lock()
 
     def set_channel(self, channel: int, value: int) -> None:
-        """
-        Définit la valeur d'un canal DMX.
-        
-        Args:
-            channel: Numéro de canal DMX (1-512)
-            value: Valeur (0-255)
-        """
         if not 1 <= channel <= DMX_CHANNELS:
             return
         value = max(0, min(255, int(value)))
@@ -55,31 +45,27 @@ class DMXBuffer:
             self._data[channel - 1] = value
 
     def set_channels(self, channels: dict[int, int]) -> None:
-        """
-        Définit plusieurs canaux en une seule opération.
-        
-        Args:
-            channels: Dictionnaire {numéro_canal: valeur}
-        """
         with self._lock:
             for channel, value in channels.items():
                 if 1 <= channel <= DMX_CHANNELS:
                     self._data[channel - 1] = max(0, min(255, int(value)))
 
+    def set_frame(self, data: bytearray) -> None:
+        """Remplace le frame complet d'un seul coup (atomique)."""
+        with self._lock:
+            self._data = data
+
     def get_channel(self, channel: int) -> int:
-        """Retourne la valeur d'un canal DMX (1-512)."""
         if not 1 <= channel <= DMX_CHANNELS:
             return 0
         with self._lock:
             return self._data[channel - 1]
 
     def get_frame(self) -> bytes:
-        """Retourne une copie du frame DMX complet (512 octets)."""
         with self._lock:
             return bytes(self._data)
 
     def blackout(self) -> None:
-        """Met tous les canaux à zéro."""
         with self._lock:
             self._data = bytearray(DMX_CHANNELS)
 
@@ -90,34 +76,21 @@ class DMXBuffer:
 
 class DMXOutput:
     """
-    Gère l'envoi DMX512 vers une interface OpenDMX (FTDI).
-    
-    Fonctionne dans un thread dédié qui lit le DMXBuffer partagé
-    et l'envoie via le port série à la cadence configurée.
-    
-    Utilisation :
-        buffer = DMXBuffer()
-        output = DMXOutput(buffer, port="COM3")
-        output.start()
-        
-        buffer.set_channel(1, 255)  # Canal 1 à fond
-        
-        output.stop()
+    Gère l'envoi DMX512 vers une interface OpenDMX via l'API D2XX.
     """
 
     def __init__(
         self,
         buffer: DMXBuffer,
-        port: Optional[str] = None,
         fps: int = DMX_DEFAULT_FPS,
     ) -> None:
         self._buffer = buffer
-        self._port_name = port
         self._fps = fps
-        self._serial = None
+        self._device = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._connected = False
+        self._device_description: str = ""
 
     @property
     def is_connected(self) -> bool:
@@ -128,62 +101,56 @@ class DMXOutput:
         return self._running
 
     @property
-    def port(self) -> Optional[str]:
-        return self._port_name
+    def device_description(self) -> str:
+        return self._device_description
 
-    def connect(self, port: Optional[str] = None) -> bool:
+    def connect(self, device_index: int = 0) -> bool:
         """
-        Ouvre la connexion vers le port série de l'OpenDMX.
-        
+        Ouvre la connexion vers le chip FTDI via D2XX.
+
         Args:
-            port: Port COM (ex: "COM3"). Si None, utilise le port configuré.
-            
-        Returns:
-            True si la connexion a réussi.
+            device_index: Index du device FTDI (0 = premier trouvé).
         """
-        if port:
-            self._port_name = port
-
-        if not self._port_name:
-            logger.error("Aucun port DMX configuré")
-            return False
-
         try:
-            import serial
+            import ftd2xx
 
-            self._serial = serial.Serial(
-                port=self._port_name,
-                baudrate=DMX_BAUDRATE,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_TWO,
-                timeout=1,
+            self._device = ftd2xx.open(device_index)
+            self._device.setBaudRate(DMX_BAUDRATE)
+            self._device.setDataCharacteristics(
+                ftd2xx.defines.BITS_8,
+                ftd2xx.defines.STOP_BITS_2,
+                ftd2xx.defines.PARITY_NONE,
             )
+            self._device.setFlowControl(ftd2xx.defines.FLOW_NONE, 0, 0)
+            self._device.purge(ftd2xx.defines.PURGE_TX | ftd2xx.defines.PURGE_RX)
+            self._device.setTimeouts(1000, 1000)
+
+            self._device_description = f"FTDI #{device_index}"
             self._connected = True
-            logger.info("DMX connecté sur %s", self._port_name)
+            logger.info("DMX D2XX connecté : %s", self._device_description)
             return True
 
         except ImportError:
-            logger.error("pyserial n'est pas installé (pip install pyserial)")
+            logger.error("ftd2xx n'est pas installé (pip install ftd2xx)")
             return False
         except Exception:
-            logger.exception("Erreur de connexion DMX sur %s", self._port_name)
+            logger.exception("Erreur de connexion DMX D2XX (index=%d)", device_index)
             self._connected = False
             return False
 
     def disconnect(self) -> None:
-        """Ferme la connexion série."""
-        if self._serial and self._serial.is_open:
-            self._serial.close()
-        self._serial = None
+        if self._device:
+            try:
+                self._device.close()
+            except Exception:
+                pass
+        self._device = None
         self._connected = False
-        logger.info("DMX déconnecté")
+        logger.info("DMX D2XX déconnecté")
 
     def start(self) -> None:
-        """Démarre le thread d'envoi DMX."""
         if self._running:
             return
-
         self._running = True
         self._thread = threading.Thread(
             target=self._output_loop,
@@ -194,67 +161,80 @@ class DMXOutput:
         logger.info("Thread DMX démarré (%d FPS)", self._fps)
 
     def stop(self) -> None:
-        """Arrête le thread d'envoi DMX et envoie un blackout."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
-
-        # Blackout de sécurité à l'arrêt
         if self._connected:
             self._buffer.blackout()
             self._send_frame()
             self.disconnect()
-
         logger.info("Thread DMX arrêté")
 
     def _send_frame(self) -> None:
-        """Envoie un frame DMX complet (break + start code + 512 canaux)."""
-        if not self._serial or not self._serial.is_open:
+        """
+        Envoie un frame DMX512 complet :
+            1. Break (TX bas >= 88us)
+            2. MAB (TX relâché >= 8us)
+            3. Start code + 512 octets
+        """
+        if not self._device or not self._connected:
             return
-
         try:
-            # Simuler le break DMX en changeant temporairement le baud rate
-            self._serial.baudrate = DMX_BREAK_RATE
-            self._serial.write(DMX_BREAK_BYTE)
-            self._serial.flush()
-
-            # Revenir au baud rate DMX et envoyer les données
-            self._serial.baudrate = DMX_BAUDRATE
+            self._device.setBreakOn()
+            time.sleep(DMX_BREAK_DURATION)
+            self._device.setBreakOff()
+            time.sleep(DMX_MAB_DURATION)
             frame = DMX_START_CODE + self._buffer.get_frame()
-            self._serial.write(frame)
-            self._serial.flush()
-
+            self._device.write(frame)
         except Exception:
             logger.exception("Erreur d'envoi DMX")
+            self._connected = False
 
     def _output_loop(self) -> None:
-        """Boucle principale du thread DMX."""
         interval = 1.0 / self._fps
-
         while self._running:
             start = time.perf_counter()
-
             if self._connected:
                 self._send_frame()
-
-            # Compensation du temps d'exécution pour maintenir le FPS
             elapsed = time.perf_counter() - start
             sleep_time = interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
+    @staticmethod
+    def list_devices() -> list[dict[str, str]]:
+        """Liste les devices FTDI disponibles via D2XX."""
+        try:
+            import ftd2xx
+            devices = []
+            dev_list = ftd2xx.listDevices()
+            if dev_list is None:
+                return []
+            for i in range(len(dev_list)):
+                try:
+                    dev = ftd2xx.getDeviceInfoDetail(i)
+                    devices.append({
+                        "index": str(i),
+                        "serial": dev.get("serial", b"").decode("utf-8", errors="replace"),
+                        "description": dev.get("description", b"").decode("utf-8", errors="replace"),
+                    })
+                except Exception:
+                    pass
+            return devices
+        except ImportError:
+            logger.warning("ftd2xx non disponible")
+            return []
+        except Exception:
+            logger.exception("Erreur listage devices FTDI")
+            return []
+
 
 class DMXOutputDummy(DMXOutput):
-    """
-    Sortie DMX factice pour le développement sans interface physique.
-    
-    Simule l'envoi DMX en loggant les changements sans matériel.
-    Utile pour développer et tester l'UI.
-    """
+    """Sortie DMX factice pour le développement sans interface physique."""
 
-    def connect(self, port: Optional[str] = None) -> bool:
-        self._port_name = port or "DUMMY"
+    def connect(self, device_index: int = 0) -> bool:
+        self._device_description = "DUMMY"
         self._connected = True
         logger.info("DMX DUMMY connecté (pas de matériel)")
         return True
@@ -264,4 +244,4 @@ class DMXOutputDummy(DMXOutput):
         logger.info("DMX DUMMY déconnecté")
 
     def _send_frame(self) -> None:
-        pass  # Ne fait rien — pas de matériel
+        pass

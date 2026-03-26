@@ -83,22 +83,18 @@ class Engine:
     def start(self, dummy_dmx: bool = False) -> None:
         """
         Démarre le moteur.
-        
+
         Args:
             dummy_dmx: Si True, utilise une sortie DMX factice (sans matériel).
         """
-        # Initialiser la sortie DMX
         if dummy_dmx:
             self.dmx_output = DMXOutputDummy(self.dmx_buffer)
             self.dmx_output.connect()
         else:
-            self.dmx_output = DMXOutput(
-                self.dmx_buffer,
-                port=self.config.dmx.port,
-                fps=self.config.dmx.fps,
-            )
-            if self.config.dmx.port:
-                self.dmx_output.connect()
+            self.dmx_output = DMXOutputDummy(self.dmx_buffer)
+            self.dmx_output.connect()
+            # On démarre en dummy, la connexion réelle se fait
+            # via le bouton Connecter dans l'UI
 
         self.dmx_output.start()
         self.bus.emit("engine.started")
@@ -118,24 +114,25 @@ class Engine:
     def update_dmx(self) -> None:
         """
         Recalcule et met à jour le buffer DMX.
-        
-        Appelé à chaque modification d'un module (fader, GM, etc.).
+        Construit le frame complet en local puis l'applique d'un seul coup
+        pour éviter tout clignotement.
         """
         # 1. Combiner les sorties en HTP
         htp_output = self.faders.compute_htp()
 
-        # 2. Appliquer le Grand Master et écrire dans le buffer
-        dmx_values: dict[int, int] = {}
+        # 2. Construire le nouveau frame localement
+        new_frame = bytearray(512)
         for circuit, value in htp_output.items():
             final_value = self.grand_master.apply(value)
             dmx_channel = self.patch.get_dmx_channel(circuit)
-            # HTP au niveau DMX aussi (si plusieurs circuits pointent vers le même canal)
-            if final_value > dmx_values.get(dmx_channel, 0):
-                dmx_values[dmx_channel] = final_value
+            if 1 <= dmx_channel <= 512:
+                idx = dmx_channel - 1
+                # HTP au niveau DMX (si plusieurs circuits → même canal)
+                if final_value > new_frame[idx]:
+                    new_frame[idx] = final_value
 
-        # 3. Blackout du buffer, puis écrire les valeurs actives
-        self.dmx_buffer.blackout()
-        self.dmx_buffer.set_channels(dmx_values)
+        # 3. Appliquer d'un seul coup (pas de blackout intermédiaire)
+        self.dmx_buffer.set_frame(new_frame)
 
     # --- Callbacks événements ---
 
@@ -152,23 +149,34 @@ class Engine:
 
     # --- Connexion DMX ---
 
-    def connect_dmx(self, port: str) -> bool:
+    def connect_dmx(self, device_index: int = 0) -> bool:
         """
-        Connecte (ou reconnecte) la sortie DMX sur un port donné.
-        
-        Args:
-            port: Nom du port COM (ex: "COM3")
-            
-        Returns:
-            True si la connexion a réussi.
+        Connecte la sortie DMX sur un device FTDI donné.
+        Remplace la sortie dummy par une vraie sortie si nécessaire.
         """
         if self.dmx_output:
-            self.dmx_output.disconnect()
-            result = self.dmx_output.connect(port)
-            if result:
-                self.config.dmx.port = port
-            return result
-        return False
+            self.dmx_output.stop()
+
+        self.dmx_output = DMXOutput(
+            self.dmx_buffer,
+            fps=self.config.dmx.fps,
+        )
+
+        if self.dmx_output.connect(device_index):
+            self.dmx_output.start()
+            self.update_dmx()
+            return True
+        else:
+            # Échec : revenir en dummy
+            self.dmx_output = DMXOutputDummy(self.dmx_buffer)
+            self.dmx_output.connect()
+            self.dmx_output.start()
+            return False
+
+    @staticmethod
+    def list_dmx_devices() -> list[dict[str, str]]:
+        """Liste les interfaces FTDI disponibles."""
+        return DMXOutput.list_devices()
 
     # --- Gestion du show ---
 
@@ -237,15 +245,3 @@ class Engine:
         self.bus.emit("show.loaded")
         logger.info("Show chargé : %s", path)
         return True
-
-    # --- Utilitaires ---
-
-    @staticmethod
-    def list_serial_ports() -> list[str]:
-        """Liste les ports série disponibles sur le système."""
-        try:
-            import serial.tools.list_ports
-            return [port.device for port in serial.tools.list_ports.comports()]
-        except ImportError:
-            logger.warning("pyserial non disponible pour lister les ports")
-            return []

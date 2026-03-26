@@ -56,7 +56,7 @@ def main() -> None:
 
     # Lancer l'interface
     app = App(engine)
-    app.run()
+    app.run(dummy_dmx=args.dummy)
 
 
 if __name__ == "__main__":
