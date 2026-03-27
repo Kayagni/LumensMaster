@@ -183,6 +183,49 @@ class Engine:
             self.dmx_output.connect()
             self.dmx_output.start()
             return False
+        
+    def get_circuit_source(self, circuit: int) -> str | None:
+        """
+        Détermine la source de la valeur d'un circuit.
+ 
+        Returns:
+            "circuit" : valeur définie directement via la vue circuits
+            "fader"   : valeur provenant d'un ou plusieurs faders
+            "both"    : valeur provenant des deux sources
+            None      : circuit inactif (valeur 0)
+        """
+        direct = self.circuits.get_level(circuit)
+ 
+        fader_level = 0
+        for fid in range(1, self.faders.count + 1):
+            fader = self.faders.get_fader(fid)
+            if fader and fader.level > 0 and circuit in fader.contents:
+                output = fader.get_output(circuit)
+                if output > fader_level:
+                    fader_level = output
+ 
+        if direct > 0 and fader_level > 0:
+            return "both"
+        elif direct > 0:
+            return "circuit"
+        elif fader_level > 0:
+            return "fader"
+        return None
+ 
+    def get_contributing_faders(self, circuit: int) -> list[int]:
+        """
+        Retourne la liste des IDs de faders qui contribuent à un circuit.
+        Ne retourne que les faders dont le level > 0 et qui contiennent le circuit.
+        """
+        result = []
+        for fid in range(1, self.faders.count + 1):
+            fader = self.faders.get_fader(fid)
+            if fader and fader.level > 0 and circuit in fader.contents:
+                if fader.get_output(circuit) > 0:
+                    result.append(fid)
+        return result
+    
+    
 
     @staticmethod
     def list_dmx_devices() -> list[dict[str, str]]:
