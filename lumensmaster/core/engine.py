@@ -24,6 +24,7 @@ from lumensmaster.core.show import load_show, new_show, save_show
 from lumensmaster.modules.faders import Faders
 from lumensmaster.modules.grand_master import GrandMaster
 from lumensmaster.modules.patch import Patch
+from lumensmaster.modules.circuits import Circuits
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class Engine:
         self.patch = Patch(self.bus)
         self.grand_master = GrandMaster(self.bus)
         self.faders = Faders(self.bus, count=self.config.ui.fader_count)
+        self.circuits = Circuits(self.bus)
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -68,6 +70,7 @@ class Engine:
         self.bus.on("fader.changed", self._on_fader_changed)
         self.bus.on("grandmaster.changed", self._on_grandmaster_changed)
         self.bus.on("patch.updated", self._on_patch_updated)
+        self.bus.on("circuit.changed", self._on_circuit_changed)
 
     @property
     def is_dirty(self) -> bool:
@@ -111,27 +114,31 @@ class Engine:
 
     # --- Calcul DMX ---
 
-    def update_dmx(self) -> None:
+    def update_dmx(self):
         """
         Recalcule et met à jour le buffer DMX.
-        Construit le frame complet en local puis l'applique d'un seul coup
-        pour éviter tout clignotement.
+        Combine en HTP : circuits directs + faders.
         """
-        # 1. Combiner les sorties en HTP
+        # 1. Sorties des faders
         htp_output = self.faders.compute_htp()
-
-        # 2. Construire le nouveau frame localement
+    
+        # 2. Combiner avec les niveaux directs des circuits (HTP)
+        circuit_output = self.circuits.get_output()
+        for circuit, value in circuit_output.items():
+            if value > htp_output.get(circuit, 0):
+                htp_output[circuit] = value
+    
+        # 3. Appliquer le Grand Master et mapper via le patch
         new_frame = bytearray(512)
         for circuit, value in htp_output.items():
             final_value = self.grand_master.apply(value)
             dmx_channel = self.patch.get_dmx_channel(circuit)
             if 1 <= dmx_channel <= 512:
                 idx = dmx_channel - 1
-                # HTP au niveau DMX (si plusieurs circuits → même canal)
                 if final_value > new_frame[idx]:
                     new_frame[idx] = final_value
-
-        # 3. Appliquer d'un seul coup (pas de blackout intermédiaire)
+    
+        # 4. Appliquer d'un seul coup (atomique)
         self.dmx_buffer.set_frame(new_frame)
 
     # --- Callbacks événements ---
@@ -144,6 +151,10 @@ class Engine:
         self.update_dmx()
 
     def _on_patch_updated(self, **kwargs: Any) -> None:
+        self._dirty = True
+        self.update_dmx()
+
+    def _on_circuit_changed(self, **kwargs):
         self._dirty = True
         self.update_dmx()
 
@@ -189,6 +200,7 @@ class Engine:
         # Reset des modules
         self.patch.clear()
         self.faders.all_down()
+        self.circuits.clear_all()
         self.grand_master.full()
         self.update_dmx()
 
@@ -210,6 +222,7 @@ class Engine:
         # Collecter l'état de tous les modules
         self._show_data["patch"] = self.patch.to_dict()
         self._show_data["faders"] = self.faders.to_dict()
+        self._show_data["circuits"] = self.circuits.to_dict()
         self._show_data["grandmaster"] = self.grand_master.level
 
         if save_show(self._show_data, save_path):
@@ -238,6 +251,7 @@ class Engine:
         # Restaurer l'état des modules
         self.patch.from_dict(data.get("patch", {}))
         self.faders.from_dict(data.get("faders", {}))
+        self.circuits.from_dict(data.get("circuits", {}))
         self.grand_master.level = data.get("grandmaster", 255)
 
         self.update_dmx()

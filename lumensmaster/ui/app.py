@@ -15,6 +15,7 @@ from lumensmaster import __app_name__, __version__
 from lumensmaster.core.engine import Engine
 from lumensmaster.ui.theme import Colors, apply_theme
 from lumensmaster.ui.views.faders_view import FadersView
+from lumensmaster.ui.views.circuits_view import CircuitsView
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class App:
         self._engine = engine
         self._faders_view: FadersView | None = None
         self._port_combo: int = 0
+        self._circuits_view = None
 
     def run(self, dummy_dmx: bool = False) -> None:
         """Lance l'application (bloquant)."""
@@ -81,6 +83,9 @@ class App:
             self._build_statusbar()
 
         dpg.set_primary_window("main_window", True)
+        # Fenêtre flottante Circuits
+        self._circuits_view = CircuitsView(self._engine)
+        self._circuits_view.build()
 
     def _build_toolbar(self) -> None:
         """Construit la barre d'outils supérieure."""
@@ -136,6 +141,15 @@ class App:
                 label="Charger démo",
                 callback=self._load_demo_contents,
             )
+
+            # --- Commande fenêtre circuits ---
+            dpg.add_spacer(width=24)
+            dpg.add_text("Fenêtres :", color=Colors.TEXT_SECONDARY)
+            dpg.add_spacer(width=4)
+            dpg.add_button(
+                label="Circuits",
+                callback=self._toggle_circuits_window,
+)
 
     def _build_content(self) -> None:
         """Construit la zone de contenu principale."""
@@ -241,3 +255,14 @@ class App:
         name = self._engine.show_name
         dirty = " *" if self._engine.is_dirty else ""
         dpg.set_value("status_show", f"Show : {name}{dirty}")
+
+    def _toggle_circuits_window(self):
+        """Ouvre ou ferme la fenêtre Circuits."""
+        if self._circuits_view and dpg.does_item_exist(self._circuits_view._window_id):
+            if dpg.is_item_shown(self._circuits_view._window_id):
+                dpg.configure_item(self._circuits_view._window_id, show=False)
+            else:
+                dpg.configure_item(self._circuits_view._window_id, show=True)
+        else:
+            self._circuits_view = CircuitsView(self._engine)
+            self._circuits_view.build()

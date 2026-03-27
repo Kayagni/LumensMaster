@@ -1,0 +1,13 @@
+{
+  "dmx": {
+    "port": "COM3",
+    "fps": 40,
+    "universe_size": 512
+  },
+  "ui": {
+    "width": 1400,
+    "height": 900,
+    "fader_count": 24
+  },
+  "last_show_path": ""
+}
