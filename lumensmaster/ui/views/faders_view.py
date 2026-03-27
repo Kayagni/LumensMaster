@@ -1,10 +1,7 @@
 """
 Vue Faders : fenêtre flottante des submasters avec Grand Master.
 
-Faders visuels avec remplissage (drawlist) :
-    - Partie inférieure remplie proportionnellement à la valeur
-    - Barre de grab horizontale à la position de la valeur
-    - Drag souris pour piloter
+Faders basés sur des sliders verticaux Dear PyGui.
 
 Tooltips :
     - Au survol d'un fader : liste des circuits pilotés
@@ -37,14 +34,6 @@ MAX_FADER_WIDTH = 100
 MIN_SLIDER_HEIGHT = 100
 MAX_SLIDER_HEIGHT = 500
 
-# Couleurs faders
-FADER_BG = (30, 30, 42, 255)
-FADER_FILL = (60, 140, 255, 200)
-FADER_GRAB = (180, 200, 255, 255)
-FADER_BORDER = (50, 50, 70, 255)
-GM_FILL = (255, 180, 40, 200)
-GM_GRAB = (255, 220, 140, 255)
-
 
 class FadersView:
     """Fenêtre flottante des faders submasters et Grand Master."""
@@ -65,10 +54,6 @@ class FadersView:
         self._last_selected: int = 0
         self._display_percent: bool = False
 
-        # Drag state
-        self._dragging_fader: int | None = None
-        self._dragging_gm: bool = False
-
         # Catégories visibles
         self._category_visible: dict[str, bool] = {"valeurs": False, "layout": False}
 
@@ -77,8 +62,8 @@ class FadersView:
         self._grid_container: int = 0
         self._gm_container: int = 0
         self._fader_widgets: dict[int, dict] = {}
-        self._drawlist_to_fader: dict[int, int] = {}  # drawlist_id -> fader_id
-        self._gm_widgets: dict[str, int] = {}
+        self._gm_slider: int = 0
+        self._gm_value_text: int = 0
         self._input_widget: int = 0
         self._handler_registry: int = 0
 
@@ -92,6 +77,8 @@ class FadersView:
         self._fader_count_widget: int = 0
 
         # Thèmes
+        self._theme_fader_normal: int = 0
+        self._theme_gm: int = 0
         self._theme_toggle_on: int = 0
         self._theme_toggle_off: int = 0
         self._theme_select_btn: int = 0
@@ -143,11 +130,6 @@ class FadersView:
         with dpg.handler_registry() as handler:
             dpg.add_key_press_handler(callback=self._on_key_press)
             dpg.add_mouse_wheel_handler(callback=self._on_mouse_wheel)
-            dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Left,
-                                        callback=self._on_mouse_click)
-            dpg.add_mouse_move_handler(callback=self._on_mouse_move)
-            dpg.add_mouse_release_handler(button=dpg.mvMouseButton_Left,
-                                          callback=self._on_mouse_release)
         self._handler_registry = handler
 
         return self._window_id
@@ -158,7 +140,6 @@ class FadersView:
         if self._window_id and dpg.does_item_exist(self._window_id):
             dpg.delete_item(self._window_id)
         self._fader_widgets.clear()
-        self._drawlist_to_fader.clear()
 
     # --- Boutons catégories ---
 
@@ -250,7 +231,6 @@ class FadersView:
 
     def _rebuild_grid(self) -> None:
         self._fader_widgets.clear()
-        self._drawlist_to_fader.clear()
 
         if dpg.does_item_exist(self._grid_container):
             children = dpg.get_item_children(self._grid_container, 1)
@@ -269,54 +249,47 @@ class FadersView:
                         self._build_fader(fader_id)
 
     def _build_fader(self, fader_id: int) -> None:
-        """Construit un fader individuel."""
+        """Construit un fader individuel avec slider et tooltip."""
         fader = self._engine.faders.get_fader(fader_id)
         if fader is None:
             return
 
-        w = self._fader_width
-        h = self._slider_height
         widgets = {}
 
         with dpg.group() as fader_group:
             # Bouton de sélection
             selected = fader_id in self._selection
             widgets["select_btn"] = dpg.add_button(
-                label=f"F{fader_id}", width=w,
+                label=f"F{fader_id}", width=self._fader_width,
                 callback=self._on_fader_select, user_data=fader_id)
             dpg.bind_item_theme(widgets["select_btn"],
                                 self._theme_select_btn_on if selected else self._theme_select_btn)
 
-            # Drawlist pour le fader visuel
-            dl = dpg.add_drawlist(width=w, height=h)
-            widgets["drawlist"] = dl
-            self._drawlist_to_fader[dl] = fader_id
+            # Slider vertical
+            widgets["slider"] = dpg.add_slider_int(
+                default_value=fader.level,
+                min_value=0,
+                max_value=255,
+                vertical=True,
+                width=self._fader_width,
+                height=self._slider_height,
+                format="",
+                callback=self._on_slider_move,
+                user_data=fader_id,
+            )
+            dpg.bind_item_theme(widgets["slider"], self._theme_fader_normal)
 
-            # Dessiner le fader
-            pad = 2
-            fill_top = self._value_to_y(fader.level, h, pad)
+            # Valeur numérique
+            widgets["value_text"] = dpg.add_text(
+                self._format_value(fader.level), color=(180, 200, 255))
 
-            widgets["bg_rect"] = dpg.draw_rectangle(
-                pmin=[0, 0], pmax=[w, h], fill=FADER_BG,
-                color=FADER_BORDER, thickness=1, parent=dl)
-            widgets["fill_rect"] = dpg.draw_rectangle(
-                pmin=[pad, fill_top], pmax=[w - pad, h - pad],
-                fill=FADER_FILL, color=(0, 0, 0, 0), parent=dl)
-            widgets["grab_line"] = dpg.draw_line(
-                p1=[0, fill_top], p2=[w, fill_top],
-                color=FADER_GRAB, thickness=2, parent=dl)
-
-            # Valeur
-            value_str = self._format_value(fader.level)
-            widgets["value_text"] = dpg.add_text(value_str, color=(180, 200, 255))
-
-            # Label
+            # Label du contenu
             widgets["label_text"] = dpg.add_text(
                 fader.label or "---", color=Colors.TEXT_SECONDARY)
 
             dpg.add_spacer(width=4)
 
-        # Tooltip attaché au GROUP (pas au drawlist !)
+        # Tooltip sur le group (liste des circuits pilotés)
         with dpg.tooltip(fader_group):
             widgets["tooltip_text"] = dpg.add_text("---")
         self._update_fader_tooltip(fader_id, widgets)
@@ -324,91 +297,37 @@ class FadersView:
         self._fader_widgets[fader_id] = widgets
 
     def _rebuild_gm(self) -> None:
+        """Construit le Grand Master."""
         if dpg.does_item_exist(self._gm_container):
             children = dpg.get_item_children(self._gm_container, 1)
             if children:
                 for child in children:
                     dpg.delete_item(child)
 
-        w = 60
-        h = self._slider_height
-        level = self._engine.grand_master.level
-        pad = 2
-        fill_top = self._value_to_y(level, h, pad)
-
         with dpg.group(parent=self._gm_container):
             dpg.add_text("GM", color=(255, 180, 40))
 
-            dl = dpg.add_drawlist(width=w, height=h)
-            self._gm_widgets["drawlist"] = dl
+            self._gm_slider = dpg.add_slider_int(
+                default_value=self._engine.grand_master.level,
+                min_value=0,
+                max_value=255,
+                vertical=True,
+                width=60,
+                height=self._slider_height,
+                format="",
+                callback=self._on_gm_move,
+            )
+            dpg.bind_item_theme(self._gm_slider, self._theme_gm)
 
-            self._gm_widgets["bg_rect"] = dpg.draw_rectangle(
-                pmin=[0, 0], pmax=[w, h], fill=FADER_BG,
-                color=FADER_BORDER, thickness=1, parent=dl)
-            self._gm_widgets["fill_rect"] = dpg.draw_rectangle(
-                pmin=[pad, fill_top], pmax=[w - pad, h - pad],
-                fill=GM_FILL, color=(0, 0, 0, 0), parent=dl)
-            self._gm_widgets["grab_line"] = dpg.draw_line(
-                p1=[0, fill_top], p2=[w, fill_top],
-                color=GM_GRAB, thickness=2, parent=dl)
-
-            self._gm_widgets["value_text"] = dpg.add_text(
-                self._format_value(level), color=(255, 220, 140))
+            self._gm_value_text = dpg.add_text(
+                self._format_value(self._engine.grand_master.level),
+                color=(255, 220, 140))
 
             dpg.add_spacer(height=4)
-            dpg.add_button(label="FULL", width=w, callback=self._on_gm_full)
-            dpg.add_button(label="BLACK", width=w, callback=self._on_gm_blackout)
+            dpg.add_button(label="FULL", width=60, callback=self._on_gm_full)
+            dpg.add_button(label="BLACK", width=60, callback=self._on_gm_blackout)
 
-    # --- Calculs visuels ---
-
-    @staticmethod
-    def _value_to_y(value: int, height: int, pad: int = 2) -> float:
-        """Convertit une valeur DMX (0-255) en coordonnée Y dans le drawlist."""
-        inner_h = height - 2 * pad
-        fill_h = (value / 255) * inner_h
-        return height - pad - fill_h
-
-    def _update_fader_visual(self, fader_id: int) -> None:
-        """Met à jour le dessin d'un fader."""
-        widgets = self._fader_widgets.get(fader_id)
-        if not widgets:
-            return
-
-        fader = self._engine.faders.get_fader(fader_id)
-        if fader is None:
-            return
-
-        w = self._fader_width
-        h = self._slider_height
-        pad = 2
-        fill_top = self._value_to_y(fader.level, h, pad)
-
-        if dpg.does_item_exist(widgets["fill_rect"]):
-            dpg.configure_item(widgets["fill_rect"],
-                               pmin=[pad, fill_top], pmax=[w - pad, h - pad])
-        if dpg.does_item_exist(widgets["grab_line"]):
-            dpg.configure_item(widgets["grab_line"],
-                               p1=[0, fill_top], p2=[w, fill_top])
-        if dpg.does_item_exist(widgets["value_text"]):
-            dpg.set_value(widgets["value_text"], self._format_value(fader.level))
-        if dpg.does_item_exist(widgets["label_text"]):
-            dpg.set_value(widgets["label_text"], fader.label or "---")
-
-    def _update_gm_visual(self) -> None:
-        level = self._engine.grand_master.level
-        w = 60
-        h = self._slider_height
-        pad = 2
-        fill_top = self._value_to_y(level, h, pad)
-
-        if dpg.does_item_exist(self._gm_widgets.get("fill_rect", 0)):
-            dpg.configure_item(self._gm_widgets["fill_rect"],
-                               pmin=[pad, fill_top], pmax=[w - pad, h - pad])
-        if dpg.does_item_exist(self._gm_widgets.get("grab_line", 0)):
-            dpg.configure_item(self._gm_widgets["grab_line"],
-                               p1=[0, fill_top], p2=[w, fill_top])
-        if dpg.does_item_exist(self._gm_widgets.get("value_text", 0)):
-            dpg.set_value(self._gm_widgets["value_text"], self._format_value(level))
+    # --- Mise à jour affichage ---
 
     def _update_fader_tooltip(self, fader_id: int, widgets: dict | None = None) -> None:
         """Met à jour le tooltip d'un fader avec la liste des circuits pilotés."""
@@ -426,19 +345,44 @@ class FadersView:
         dpg.set_value(widgets["tooltip_text"], text)
 
     def _update_fader_display(self, fader_id: int) -> None:
-        self._update_fader_visual(fader_id)
-        self._update_fader_tooltip(fader_id)
-
         widgets = self._fader_widgets.get(fader_id)
-        if widgets and dpg.does_item_exist(widgets.get("select_btn", 0)):
+        if not widgets:
+            return
+
+        fader = self._engine.faders.get_fader(fader_id)
+        if fader is None:
+            return
+
+        # Slider
+        if dpg.does_item_exist(widgets.get("slider", 0)):
+            dpg.set_value(widgets["slider"], fader.level)
+
+        # Valeur
+        if dpg.does_item_exist(widgets.get("value_text", 0)):
+            dpg.set_value(widgets["value_text"], self._format_value(fader.level))
+
+        # Label
+        if dpg.does_item_exist(widgets.get("label_text", 0)):
+            dpg.set_value(widgets["label_text"], fader.label or "---")
+
+        # Sélection
+        if dpg.does_item_exist(widgets.get("select_btn", 0)):
             selected = fader_id in self._selection
             dpg.bind_item_theme(widgets["select_btn"],
                                 self._theme_select_btn_on if selected else self._theme_select_btn)
 
+        # Tooltip
+        self._update_fader_tooltip(fader_id, widgets)
+
     def _update_all_displays(self) -> None:
         for fader_id in self._fader_widgets:
             self._update_fader_display(fader_id)
-        self._update_gm_visual()
+        # Grand Master
+        if dpg.does_item_exist(self._gm_slider):
+            dpg.set_value(self._gm_slider, self._engine.grand_master.level)
+        if dpg.does_item_exist(self._gm_value_text):
+            dpg.set_value(self._gm_value_text,
+                          self._format_value(self._engine.grand_master.level))
 
     def _update_selection_display(self) -> None:
         for fader_id, widgets in self._fader_widgets.items():
@@ -447,70 +391,34 @@ class FadersView:
                 dpg.bind_item_theme(widgets["select_btn"],
                                     self._theme_select_btn_on if selected else self._theme_select_btn)
 
-    # --- Mouse drag pour drawlist faders ---
+    # --- Callbacks faders ---
 
-    def _on_mouse_click(self, sender: int, value: Any) -> None:
-        """Clic souris : démarrer le drag sur un fader si survolé."""
-        if not dpg.does_item_exist(self._window_id):
-            return
-        if not dpg.is_item_hovered(self._window_id):
-            return
+    def _on_slider_move(self, sender: int, value: int, user_data: int) -> None:
+        """Appelé quand un slider de fader bouge."""
+        fader_id = user_data
+        self._engine.faders.set_level(fader_id, value)
+        widgets = self._fader_widgets.get(fader_id)
+        if widgets and dpg.does_item_exist(widgets.get("value_text", 0)):
+            dpg.set_value(widgets["value_text"], self._format_value(value))
 
-        # Vérifier le Grand Master
-        gm_dl = self._gm_widgets.get("drawlist")
-        if gm_dl and dpg.does_item_exist(gm_dl) and dpg.is_item_hovered(gm_dl):
-            self._dragging_gm = True
-            self._apply_mouse_to_fader_dl(gm_dl, is_gm=True)
-            return
+    def _on_gm_move(self, sender: int, value: int) -> None:
+        self._engine.grand_master.level = value
+        if dpg.does_item_exist(self._gm_value_text):
+            dpg.set_value(self._gm_value_text, self._format_value(value))
 
-        # Vérifier les faders
-        for dl_id, fader_id in self._drawlist_to_fader.items():
-            if dpg.does_item_exist(dl_id) and dpg.is_item_hovered(dl_id):
-                self._dragging_fader = fader_id
-                self._apply_mouse_to_fader_dl(dl_id, is_gm=False)
-                return
+    def _on_gm_full(self) -> None:
+        self._engine.grand_master.full()
+        if dpg.does_item_exist(self._gm_slider):
+            dpg.set_value(self._gm_slider, 255)
+        if dpg.does_item_exist(self._gm_value_text):
+            dpg.set_value(self._gm_value_text, self._format_value(255))
 
-    def _on_mouse_move(self, sender: int, value: Any) -> None:
-        """Mouvement souris : mettre à jour le fader si en train de dragger."""
-        if self._dragging_gm:
-            gm_dl = self._gm_widgets.get("drawlist")
-            if gm_dl:
-                self._apply_mouse_to_fader_dl(gm_dl, is_gm=True)
-        elif self._dragging_fader is not None:
-            widgets = self._fader_widgets.get(self._dragging_fader)
-            if widgets:
-                self._apply_mouse_to_fader_dl(widgets["drawlist"], is_gm=False)
-
-    def _on_mouse_release(self, sender: int, value: Any) -> None:
-        """Relâchement souris : arrêter le drag."""
-        self._dragging_fader = None
-        self._dragging_gm = False
-
-    def _apply_mouse_to_fader_dl(self, dl_id: int, is_gm: bool) -> None:
-        """Calcule la valeur du fader à partir de la position de la souris."""
-        if not dpg.does_item_exist(dl_id):
-            return
-
-        mouse_y = dpg.get_mouse_pos()[1]
-        rect_min = dpg.get_item_rect_min(dl_id)
-        rect_max = dpg.get_item_rect_max(dl_id)
-        height = rect_max[1] - rect_min[1]
-
-        if height <= 0:
-            return
-
-        relative_y = max(0, min(height, mouse_y - rect_min[1]))
-        value = int((1.0 - relative_y / height) * 255)
-        value = max(0, min(255, value))
-
-        if is_gm:
-            self._engine.grand_master.level = value
-            self._update_gm_visual()
-        else:
-            fader_id = self._dragging_fader
-            if fader_id is not None:
-                self._engine.faders.set_level(fader_id, value)
-                self._update_fader_visual(fader_id)
+    def _on_gm_blackout(self) -> None:
+        self._engine.grand_master.blackout()
+        if dpg.does_item_exist(self._gm_slider):
+            dpg.set_value(self._gm_slider, 0)
+        if dpg.does_item_exist(self._gm_value_text):
+            dpg.set_value(self._gm_value_text, self._format_value(0))
 
     # --- Sélection ---
 
@@ -564,14 +472,6 @@ class FadersView:
     def _clear_all(self) -> None:
         self._engine.faders.all_down()
         self._update_all_displays()
-
-    def _on_gm_full(self) -> None:
-        self._engine.grand_master.full()
-        self._update_gm_visual()
-
-    def _on_gm_blackout(self) -> None:
-        self._engine.grand_master.blackout()
-        self._update_gm_visual()
 
     def _on_display_mode_changed(self, sender: int, value: str) -> None:
         self._display_percent = (value == "%")
@@ -680,7 +580,7 @@ class FadersView:
             if fader:
                 new_level = max(0, min(255, fader.level + delta))
                 self._engine.faders.set_level(fader_id, new_level)
-                self._update_fader_visual(fader_id)
+                self._update_fader_display(fader_id)
 
     # --- Utilitaires ---
 
@@ -707,6 +607,25 @@ class FadersView:
     # --- Thèmes ---
 
     def _create_themes(self) -> None:
+        # Fader normal (slider)
+        with dpg.theme() as self._theme_fader_normal:
+            with dpg.theme_component(dpg.mvSliderInt):
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (30, 30, 42))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (40, 40, 55))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, Colors.ACCENT)
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, Colors.ACCENT_HOVER)
+                dpg.add_theme_style(dpg.mvStyleVar_GrabMinSize, 12)
+
+        # Grand Master (slider)
+        with dpg.theme() as self._theme_gm:
+            with dpg.theme_component(dpg.mvSliderInt):
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (30, 30, 42))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (50, 40, 30))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, (255, 180, 40))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, (255, 220, 140))
+                dpg.add_theme_style(dpg.mvStyleVar_GrabMinSize, 14)
+
+        # Bouton sélection (normal)
         with dpg.theme() as self._theme_select_btn:
             with dpg.theme_component(dpg.mvButton):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.BG_WIDGET)
@@ -715,6 +634,7 @@ class FadersView:
                 dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.TEXT_SECONDARY)
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
+        # Bouton sélection (sélectionné)
         with dpg.theme() as self._theme_select_btn_on:
             with dpg.theme_component(dpg.mvButton):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 60, 100))
@@ -723,6 +643,7 @@ class FadersView:
                 dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.ACCENT)
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
+        # Toggle ON
         with dpg.theme() as self._theme_toggle_on:
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.ACCENT_ACTIVE)
@@ -730,6 +651,7 @@ class FadersView:
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, Colors.ACCENT)
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
 
+        # Toggle OFF
         with dpg.theme() as self._theme_toggle_off:
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.BG_LIGHT)
@@ -741,4 +663,5 @@ class FadersView:
         logger.debug("Fenetre Faders fermee")
 
     def update_fader_from_external(self, fader_id: int, level: int) -> None:
+        """Met à jour l'affichage d'un fader modifié depuis l'extérieur."""
         self._update_fader_display(fader_id)
