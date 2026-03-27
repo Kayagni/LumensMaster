@@ -7,7 +7,7 @@
   "ui": {
     "width": 1400,
     "height": 900,
-    "fader_count": 24
+    "fader_count": 64
   },
   "last_show_path": ""
 }

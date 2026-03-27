@@ -30,7 +30,7 @@ class UIConfig:
     """Configuration de l'interface graphique."""
     width: int = 1400
     height: int = 900
-    fader_count: int = 24  # Nombre de faders affichés
+    fader_count: int = 64  # Nombre de faders affichés
 
 
 @dataclass
