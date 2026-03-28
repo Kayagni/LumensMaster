@@ -63,6 +63,8 @@ class Engine:
         self.faders = Faders(self.bus, count=self.config.ui.fader_count)
         self.circuits = Circuits(self.bus)
         self.sequencer = Sequencer(self.bus)
+        # Le séquenceur appelle update_dmx directement (pas via le bus)
+        self.sequencer.set_dmx_callback(self.update_dmx)
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -76,7 +78,7 @@ class Engine:
         self.bus.on("grandmaster.changed", self._on_grandmaster_changed)
         self.bus.on("patch.updated", self._on_patch_updated)
         self.bus.on("circuit.changed", self._on_circuit_changed)
-        self.bus.on("sequencer.output_changed", self._on_sequencer_changed)
+        
 
     @property
     def is_dirty(self) -> bool:
@@ -173,9 +175,6 @@ class Engine:
 
     def _on_circuit_changed(self, **kwargs):
         self._dirty = True
-        self.update_dmx()
-
-    def _on_sequencer_changed(self, **kwargs):
         self.update_dmx()
 
     # --- Connexion DMX ---

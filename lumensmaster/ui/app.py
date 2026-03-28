@@ -35,10 +35,10 @@ class App:
     def run(self, dummy_dmx: bool = False) -> None:
         """Lance l'application (bloquant)."""
         dpg.create_context()
-
+ 
         # Charger les icônes
         get_icon_manager().load_all()
-
+ 
         dpg.create_viewport(
             title=f"{__app_name__} v{__version__}",
             width=self._engine.config.ui.width,
@@ -46,18 +46,23 @@ class App:
             min_width=800,
             min_height=600,
         )
-
+ 
         apply_theme()
         self._build_ui()
-
+ 
         dpg.setup_dearpygui()
         dpg.show_viewport()
-
+ 
         # Démarrer le moteur
         self._engine.start(dummy_dmx=dummy_dmx)
-
+ 
         try:
-            dpg.start_dearpygui()
+            # Boucle de rendu manuelle (au lieu de dpg.start_dearpygui)
+            # Permet d'exécuter poll_ui() du séquenceur à chaque frame
+            # depuis le thread principal (Dear PyGui n'est pas thread-safe)
+            while dpg.is_dearpygui_running():
+                self._engine.sequencer.poll_ui()
+                dpg.render_dearpygui_frame()
         finally:
             self._engine.stop()
             self._engine.config.save()
