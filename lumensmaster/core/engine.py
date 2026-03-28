@@ -109,6 +109,7 @@ class Engine:
 
         self.dmx_output.start()
         self.bus.emit("engine.started")
+        self.sequencer.ensure_default_cue()
         logger.info("Moteur LumensMaster démarré")
 
     def stop(self) -> None:
@@ -298,6 +299,7 @@ class Engine:
         self.grand_master.full()
         self.update_dmx()
         self.sequencer.from_dict({})
+        self.sequencer.ensure_default_cue()
 
         self.bus.emit("show.loaded")
         logger.info("Nouveau show créé")

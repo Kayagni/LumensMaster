@@ -202,7 +202,7 @@ class CircuitsView:
             self._record_fader_input = dpg.add_input_int(
                 default_value=1, min_value=1,
                 max_value=self._engine.faders.count,
-                min_clamped=True, max_clamped=True, width=60)
+                min_clamped=True, max_clamped=True, width=100)
             dpg.add_button(label="REC", callback=self._on_record_to_fader)
             dpg.add_spacer(width=16)
             dpg.add_button(label="Clear sel.", callback=self._clear_selected)

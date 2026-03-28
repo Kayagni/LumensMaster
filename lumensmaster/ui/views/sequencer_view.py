@@ -44,6 +44,8 @@ class SequencerView:
         self._status_text: int = 0
         self._onstage_text: int = 0
         self._preset_text: int = 0
+        self._goto_combo = 0
+        self._manual_completed: bool = False
 
         # Widgets enregistrement
         self._rec_number_input: int = 0
@@ -174,6 +176,12 @@ class SequencerView:
             dpg.add_spacer(width=8)
             dpg.add_button(label="PAUSE", width=80, height=40,
                            callback=self._on_pause)
+            dpg.add_spacer(width=16)
+            dpg.add_text("GOTO:", color=Colors.TEXT_SECONDARY)
+            self._goto_combo = dpg.add_combo(
+                items=self._get_cue_labels(), width=180, default_value="")
+            dpg.add_button(label="GOTO", width=60, height=40,
+                           callback=self._on_goto)
 
             dpg.add_spacer(width=24)
 
@@ -227,7 +235,7 @@ class SequencerView:
             dpg.add_text("N:", color=Colors.TEXT_SECONDARY)
             self._rec_number_input = dpg.add_input_float(
                 default_value=self._engine.sequencer.get_next_free_number(),
-                width=80, format="%.1f", step=0.1)
+                width=100, format="%.1f", step=0.1)
 
             dpg.add_text("Nom:", color=Colors.TEXT_SECONDARY)
             self._rec_name_input = dpg.add_input_text(
@@ -237,19 +245,19 @@ class SequencerView:
 
             dpg.add_text("In:", color=Colors.TEXT_SECONDARY)
             self._rec_fade_in = dpg.add_input_float(
-                default_value=3.0, width=60, format="%.1f", step=0.5)
+                default_value=3.0, width=100, format="%.1f", step=0.5)
             dpg.add_text("Out:", color=Colors.TEXT_SECONDARY)
             self._rec_fade_out = dpg.add_input_float(
-                default_value=3.0, width=60, format="%.1f", step=0.5)
+                default_value=3.0, width=100, format="%.1f", step=0.5)
             dpg.add_text("DIn:", color=Colors.TEXT_SECONDARY)
             self._rec_delay_in = dpg.add_input_float(
-                default_value=0.0, width=60, format="%.1f", step=0.5)
+                default_value=0.0, width=100, format="%.1f", step=0.5)
             dpg.add_text("DOut:", color=Colors.TEXT_SECONDARY)
             self._rec_delay_out = dpg.add_input_float(
-                default_value=0.0, width=60, format="%.1f", step=0.5)
+                default_value=0.0, width=100, format="%.1f", step=0.5)
             dpg.add_text("Link:", color=Colors.TEXT_SECONDARY)
             self._rec_link_time = dpg.add_input_float(
-                default_value=0.0, width=60, format="%.1f", step=0.5)
+                default_value=0.0, width=100, format="%.1f", step=0.5)
 
         dpg.add_spacer(height=4)
 
@@ -438,22 +446,28 @@ class SequencerView:
         self._engine.sequencer.pause()
 
     def _on_manual_slider(self, sender: int, value: int) -> None:
-        """Slider de crossfade manuel (0-100)."""
+        """Slider de crossfade manuel (0-100) avec protection anti-cascade."""
         seq = self._engine.sequencer
+ 
+        # Après une complétion, ignorer tant que le slider n'est pas
+        # redescendu en dessous de 5%
+        if self._manual_completed:
+            if value < 5:
+                self._manual_completed = False
+            return
+ 
         progress = value / 100.0
  
         if value > 0 and seq.mode == CrossfadeMode.IDLE:
-            # Activer le mode manuel quand on commence à bouger
             seq.set_manual_mode(True)
  
         if seq.mode == CrossfadeMode.MANUAL:
             seq.set_manual_progress(progress)
  
-            # Compléter le crossfade à 100%
             if value >= 100:
                 seq.complete_manual()
-                # Remettre le slider à 0 pour le prochain crossfade
-                dpg.set_value(sender, 0)
+                self._manual_completed = True
+                dpg.configure_item(sender, default_value=0)
 
     def _on_cue_click(self, sender: int, value: Any, user_data: float) -> None:
         """Clic sur un numéro de cue → GO TO."""
@@ -462,16 +476,14 @@ class SequencerView:
     # --- Callbacks cues ---
 
     def _on_record_from_circuits(self) -> None:
-        """Enregistre une cue depuis l'état des circuits."""
+        """Enregistre une cue depuis l'état des circuits (le noir est autorisé)."""
         contents = self._engine.circuits.get_active_snapshot()
-        if not contents:
-            logger.info("Rien a enregistrer (aucun circuit actif)")
-            return
+        if contents is None:
+            contents = {}
         self._record_cue(contents)
 
     def _on_record_from_output(self) -> None:
-        """Enregistre une cue depuis la sortie DMX combinée (HTP)."""
-        # Combiner toutes les sources
+        """Enregistre une cue depuis la sortie DMX combinée (le noir est autorisé)."""
         htp = self._engine.faders.compute_htp()
         circuit_output = self._engine.circuits.get_output()
         for circuit, value in circuit_output.items():
@@ -481,10 +493,6 @@ class SequencerView:
         for circuit, value in seq_output.items():
             if value > htp.get(circuit, 0):
                 htp[circuit] = value
-
-        if not htp:
-            logger.info("Rien a enregistrer (sortie vide)")
-            return
         self._record_cue(htp)
 
     def _record_cue(self, contents: dict[int, int]) -> None:
@@ -521,6 +529,17 @@ class SequencerView:
         except (ValueError, IndexError):
             pass
 
+    def _on_goto(self) -> None:
+        """Saute instantanément à la cue sélectionnée."""
+        selected = dpg.get_value(self._goto_combo)
+        if not selected:
+            return
+        try:
+            cue_number = float(selected.split(" - ")[0])
+            self._engine.sequencer.goto_cue_instant(cue_number)
+        except (ValueError, IndexError):
+            pass
+
     # --- Callbacks événements bus ---
 
     def _on_state_changed(self, **kwargs) -> None:
@@ -534,6 +553,9 @@ class SequencerView:
         # Mettre à jour le combo de suppression
         if dpg.does_item_exist(self._edit_cue_combo):
             dpg.configure_item(self._edit_cue_combo,
+                               items=self._get_cue_labels())
+        if dpg.does_item_exist(self._goto_combo):
+            dpg.configure_item(self._goto_combo,
                                items=self._get_cue_labels())
         self._update_transport_display()
 

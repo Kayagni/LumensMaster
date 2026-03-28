@@ -83,7 +83,7 @@ class Cue:
 class Sequencer:
     """Séquenceur de cues avec crossfade thread-safe."""
 
-    CROSSFADE_FPS = 40
+    CROSSFADE_FPS = 25
 
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
@@ -124,6 +124,22 @@ class Sequencer:
         self._ui_progress_dirty: bool = False
         self._ui_last_progress: float = 0.0
         self._ui_link_pending: bool = False
+
+    def ensure_default_cue(self) -> None:
+        """Crée la cue 'Noir début' si la séquence est vide."""
+        if not self._cues:
+            self.add_cue(Cue(
+                number=0.0,
+                name="Noir début",
+                contents={},
+                fade_in=0.0,
+                fade_out=0.0,
+                delay_in=0.0,
+                delay_out=0.0,
+                link_time=0.0,
+            ))
+            self._current_index = 0
+            self._onstage_levels = {}
 
     # --- Configuration ---
 
@@ -271,8 +287,7 @@ class Sequencer:
                 self._complete_crossfade_locked()
             next_index = self._current_index + 1
             if next_index >= len(self._cues):
-                logger.info("Fin de séquence")
-                return
+                next_index = 0  # Boucle vers le début
             self._start_crossfade_locked(next_index)
 
         # Émettre depuis le thread UI (safe)
@@ -306,6 +321,26 @@ class Sequencer:
                 self._bus.emit("sequencer.state_changed")
                 self._bus.emit("sequencer.output_changed")
                 self._notify_dmx()
+                return
+            
+    def goto_cue_instant(self, cue_number: float) -> None:
+        """Saute directement à une cue sans crossfade (instantané)."""
+        for i, cue in enumerate(self._cues):
+            if abs(cue.number - cue_number) < 0.001:
+                with self._lock:
+                    if self.is_crossfading:
+                        self._complete_crossfade_locked()
+                    # Application instantanée
+                    self._current_index = i
+                    self._onstage_levels = dict(cue.contents)
+                    self._mode = CrossfadeMode.IDLE
+                    self._global_progress = 0.0
+ 
+                self._bus.emit("sequencer.state_changed")
+                self._bus.emit("sequencer.output_changed")
+                self._notify_dmx()
+                logger.info("GOTO instantané : cue %.1f '%s'",
+                            cue.number, cue.name)
                 return
 
     def pause(self) -> None:
