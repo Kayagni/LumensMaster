@@ -85,6 +85,7 @@ class FadersView:
         self._theme_select_btn_on: int = 0
 
         self._updating_layout = False
+        self._engine.bus.on("fader.contents_changed", self._on_fader_contents_changed)
 
     def build(self) -> int:
         self._create_themes()
@@ -390,6 +391,11 @@ class FadersView:
                 selected = fader_id in self._selection
                 dpg.bind_item_theme(widgets["select_btn"],
                                     self._theme_select_btn_on if selected else self._theme_select_btn)
+                
+    def _on_fader_contents_changed(self, fader_id: int = 0, **kwargs) -> None:
+        """Appelé quand le contenu d'un fader change (ex: REC depuis circuits)."""
+        if fader_id > 0:
+            self._update_fader_display(fader_id)
 
     # --- Callbacks faders ---
 
@@ -397,9 +403,7 @@ class FadersView:
         """Appelé quand un slider de fader bouge."""
         fader_id = user_data
         self._engine.faders.set_level(fader_id, value)
-        widgets = self._fader_widgets.get(fader_id)
-        if widgets and dpg.does_item_exist(widgets.get("value_text", 0)):
-            dpg.set_value(widgets["value_text"], self._format_value(value))
+        self._update_fader_display(fader_id)
 
     def _on_gm_move(self, sender: int, value: int) -> None:
         self._engine.grand_master.level = value

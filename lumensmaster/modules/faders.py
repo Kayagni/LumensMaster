@@ -128,6 +128,7 @@ class Faders:
             fader_id,
             len(fader.contents),
         )
+        self._bus.emit("fader.contents_changed", fader_id=fader_id)
 
     def clear_contents(self, fader_id: int) -> None:
         """Vide le contenu d'un fader."""
