@@ -4,10 +4,12 @@ Module de sortie DMX512 via OpenDMX (FTDI FT232).
 Utilise l'API D2XX native de FTDI (via le package ftd2xx) pour un contrôle
 fiable du timing DMX, en particulier le break signal.
 
-Prérequis :
-    - Driver FTDI D2XX installé (inclus dans le combined driver)
-    - Le VCP doit être désactivé pour que D2XX puisse accéder au chip
-    - pip install ftd2xx
+IMPORTANT - Timing :
+    Un frame DMX512 complet (start code + 512 octets) à 250kbps prend ~22.6ms.
+    Le thread d'envoi DOIT attendre que le chip FTDI ait terminé la transmission
+    du frame précédent avant d'envoyer le break du frame suivant. Sans cette
+    attente, le break interrompt la transmission en cours et corrompt le signal,
+    causant des clignotements et des couleurs parasites côté récepteur.
 """
 
 from __future__ import annotations
@@ -23,11 +25,17 @@ logger = logging.getLogger(__name__)
 DMX_CHANNELS = 512
 DMX_BAUDRATE = 250000
 DMX_START_CODE = b"\x00"
-DMX_DEFAULT_FPS = 40
+DMX_DEFAULT_FPS = 25
 
 # Timing DMX512 (en secondes)
 DMX_BREAK_DURATION = 0.000100    # Break >= 88us, on utilise 100us
 DMX_MAB_DURATION = 0.000012      # Mark After Break >= 8us, on utilise 12us
+
+# Temps de transmission d'un frame complet (513 octets × 11 bits / 250kbps)
+DMX_FRAME_TX_TIME = 513 * 11 / DMX_BAUDRATE  # ~0.02257s = 22.6ms
+
+# Timeout max pour attendre le drain du buffer TX
+DMX_TX_DRAIN_TIMEOUT = 0.050  # 50ms max
 
 
 class DMXBuffer:
@@ -91,6 +99,10 @@ class DMXOutput:
         self._running = False
         self._connected = False
         self._device_description: str = ""
+        self._last_ch1 = 0
+        self._last_ch2 = 0
+        self._last_ch3 = 0
+        self._last_ch4 = 0
 
     @property
     def is_connected(self) -> bool:
@@ -107,9 +119,6 @@ class DMXOutput:
     def connect(self, device_index: int = 0) -> bool:
         """
         Ouvre la connexion vers le chip FTDI via D2XX.
-
-        Args:
-            device_index: Index du device FTDI (0 = premier trouvé).
         """
         try:
             import ftd2xx
@@ -171,27 +180,62 @@ class DMXOutput:
             self.disconnect()
         logger.info("Thread DMX arrêté")
 
+    def _wait_tx_drain(self) -> None:
+        """
+        Attend que le buffer de transmission FTDI soit vide.
+        Essentiel pour éviter d'envoyer le break pendant que le chip
+        transmet encore le frame précédent.
+        """
+        if not self._device:
+            return
+        try:
+            deadline = time.perf_counter() + DMX_TX_DRAIN_TIMEOUT
+            while time.perf_counter() < deadline:
+                status = self._device.getStatus()
+                tx_queue = status[1]  # (rxQueue, txQueue, eventStatus)
+                if tx_queue == 0:
+                    return
+                # Petit sleep pour ne pas saturer le CPU
+                time.sleep(0.001)
+            # Timeout : purger le buffer TX par sécurité
+            import ftd2xx
+            self._device.purge(ftd2xx.defines.PURGE_TX)
+            logger.debug("TX drain timeout, purge effectuée")
+        except Exception:
+            pass
+
     def _send_frame(self) -> None:
-        """
-        Envoie un frame DMX512 complet :
-            1. Break (TX bas >= 88us)
-            2. MAB (TX relâché >= 8us)
-            3. Start code + 512 octets
-        """
         if not self._device or not self._connected:
             return
         try:
+            self._wait_tx_drain()
             self._device.setBreakOn()
             time.sleep(DMX_BREAK_DURATION)
             self._device.setBreakOff()
             time.sleep(DMX_MAB_DURATION)
             frame = DMX_START_CODE + self._buffer.get_frame()
+
+            # --- DIAGNOSTIC : vérifier les 4 premiers canaux ---
+            ch1, ch2, ch3, ch4 = frame[1], frame[2], frame[3], frame[4]
+            if self._last_ch1 != 0 and ch1 == 0 and self._last_ch1 > 10:
+                logger.warning("DMX GLITCH: ch1 %d->0, ch2 %d->%d, ch3 %d->%d, ch4 %d->%d",
+                               self._last_ch1, self._last_ch2, ch2,
+                               self._last_ch3, ch3, self._last_ch4, ch4)
+            self._last_ch1, self._last_ch2 = ch1, ch2
+            self._last_ch3, self._last_ch4 = ch3, ch4
+            # --- FIN DIAGNOSTIC ---
+
             self._device.write(frame)
         except Exception:
             logger.exception("Erreur d'envoi DMX")
             self._connected = False
 
     def _output_loop(self) -> None:
+        """
+        Boucle d'envoi DMX.
+        Le timing est naturellement régulé par _wait_tx_drain() :
+        on n'envoie un nouveau frame qu'une fois le précédent transmis.
+        """
         interval = 1.0 / self._fps
         while self._running:
             start = time.perf_counter()

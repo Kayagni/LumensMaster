@@ -1,7 +1,7 @@
 {
   "dmx": {
     "port": "COM3",
-    "fps": 40,
+    "fps": 25,
     "universe_size": 512
   },
   "ui": {
