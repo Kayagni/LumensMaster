@@ -25,6 +25,7 @@ from lumensmaster.modules.faders import Faders
 from lumensmaster.modules.grand_master import GrandMaster
 from lumensmaster.modules.patch import Patch
 from lumensmaster.modules.circuits import Circuits
+from lumensmaster.modules.sequencer import Sequencer
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class Engine:
         self.grand_master = GrandMaster(self.bus)
         self.faders = Faders(self.bus, count=self.config.ui.fader_count)
         self.circuits = Circuits(self.bus)
+        self.sequencer = Sequencer(self.bus)
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -71,6 +73,7 @@ class Engine:
         self.bus.on("grandmaster.changed", self._on_grandmaster_changed)
         self.bus.on("patch.updated", self._on_patch_updated)
         self.bus.on("circuit.changed", self._on_circuit_changed)
+        self.bus.on("sequencer.output_changed", self._on_sequencer_changed)
 
     @property
     def is_dirty(self) -> bool:
@@ -108,6 +111,7 @@ class Engine:
         if self.dmx_output:
             self.dmx_output.stop()
 
+        self.sequencer.stop()
         self.bus.emit("engine.stopped")
         self.bus.clear()
         logger.info("Moteur LumensMaster arrêté")
@@ -127,8 +131,14 @@ class Engine:
         for circuit, value in circuit_output.items():
             if value > htp_output.get(circuit, 0):
                 htp_output[circuit] = value
+
+        # 3. Combiner avec la sortie du séquenceur (HTP)
+        seq_output = self.sequencer.get_output()
+        for circuit, value in seq_output.items():
+            if value > htp_output.get(circuit, 0):
+                htp_output[circuit] = value
     
-        # 3. Appliquer le Grand Master et mapper via le patch
+        # 4. Appliquer le Grand Master et mapper via le patch
         new_frame = bytearray(512)
         for circuit, value in htp_output.items():
             final_value = self.grand_master.apply(value)
@@ -156,6 +166,9 @@ class Engine:
 
     def _on_circuit_changed(self, **kwargs):
         self._dirty = True
+        self.update_dmx()
+
+    def _on_sequencer_changed(self, **kwargs):
         self.update_dmx()
 
     # --- Connexion DMX ---
@@ -246,6 +259,7 @@ class Engine:
         self.circuits.clear_all()
         self.grand_master.full()
         self.update_dmx()
+        self.sequencer.from_dict({})
 
         self.bus.emit("show.loaded")
         logger.info("Nouveau show créé")
@@ -267,6 +281,7 @@ class Engine:
         self._show_data["faders"] = self.faders.to_dict()
         self._show_data["circuits"] = self.circuits.to_dict()
         self._show_data["grandmaster"] = self.grand_master.level
+        self._show_data["sequencer"] = self.sequencer.to_dict()
 
         if save_show(self._show_data, save_path):
             self._show_path = save_path
@@ -296,6 +311,7 @@ class Engine:
         self.faders.from_dict(data.get("faders", {}))
         self.circuits.from_dict(data.get("circuits", {}))
         self.grand_master.level = data.get("grandmaster", 255)
+        self.sequencer.from_dict(data.get("sequencer", {}))
 
         self.update_dmx()
         self.config.last_show_path = path

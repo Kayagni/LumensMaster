@@ -17,6 +17,7 @@ from lumensmaster.ui.theme import Colors, apply_theme
 from lumensmaster.ui.icons import get_icon_manager
 from lumensmaster.ui.views.circuits_view import CircuitsView
 from lumensmaster.ui.views.faders_view import FadersView
+from lumensmaster.ui.views.sequencer_view import SequencerView
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class App:
         self._circuits_view: CircuitsView | None = None
         self._faders_view: FadersView | None = None
         self._port_combo: int = 0
+        self._sequencer_view: SequencerView | None = None
 
     def run(self, dummy_dmx: bool = False) -> None:
         """Lance l'application (bloquant)."""
@@ -78,6 +80,9 @@ class App:
         self._faders_view = FadersView(self._engine)
         self._faders_view.build()
 
+        self._sequencer_view = SequencerView(self._engine)
+        self._sequencer_view.build()
+
     def _build_toolbar(self) -> None:
         """Construit la barre d'outils supérieure."""
         with dpg.group(horizontal=True):
@@ -122,6 +127,8 @@ class App:
 
             dpg.add_button(label="Circuits", callback=self._toggle_circuits_window)
             dpg.add_button(label="Faders", callback=self._toggle_faders_window)
+
+            dpg.add_button(label="Sequenceur", callback=self._toggle_sequencer_window)
 
     def _build_statusbar(self) -> None:
         """Barre de statut inférieure."""
@@ -200,6 +207,15 @@ class App:
         else:
             self._faders_view = FadersView(self._engine)
             self._faders_view.build()
+
+    def _toggle_sequencer_window(self) -> None:
+        """Affiche ou masque la fenêtre Séquenceur."""
+        if self._sequencer_view and dpg.does_item_exist(self._sequencer_view._window_id):
+            shown = dpg.is_item_shown(self._sequencer_view._window_id)
+            dpg.configure_item(self._sequencer_view._window_id, show=not shown)
+        else:
+            self._sequencer_view = SequencerView(self._engine)
+            self._sequencer_view.build()
 
     # --- Mise à jour statut ---
 
