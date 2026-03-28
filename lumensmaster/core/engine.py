@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import threading
 from lumensmaster.core.config import AppConfig
 from lumensmaster.core.dmx import DMXBuffer, DMXOutput, DMXOutputDummy
 from lumensmaster.core.events import EventBus
@@ -67,6 +68,8 @@ class Engine:
         self._show_data: dict[str, Any] = new_show()
         self._show_path: str = ""
         self._dirty: bool = False  # True si des modifications non sauvegardées
+        # Verrou pour sérialiser les appels à update_dmx
+        self._dmx_lock = threading.Lock()
 
         # Abonnements aux événements
         self.bus.on("fader.changed", self._on_fader_changed)
@@ -121,35 +124,39 @@ class Engine:
     def update_dmx(self):
         """
         Recalcule et met à jour le buffer DMX.
-        Combine en HTP : circuits directs + faders.
+        Combine en HTP : circuits directs + faders + séquenceur.
+        
+        Thread-safe : un seul appel à update_dmx peut s'exécuter à la fois.
+        Empêche les race conditions entre le thread crossfade et le thread UI.
         """
-        # 1. Sorties des faders
-        htp_output = self.faders.compute_htp()
-    
-        # 2. Combiner avec les niveaux directs des circuits (HTP)
-        circuit_output = self.circuits.get_output()
-        for circuit, value in circuit_output.items():
-            if value > htp_output.get(circuit, 0):
-                htp_output[circuit] = value
-
-        # 3. Combiner avec la sortie du séquenceur (HTP)
-        seq_output = self.sequencer.get_output()
-        for circuit, value in seq_output.items():
-            if value > htp_output.get(circuit, 0):
-                htp_output[circuit] = value
-    
-        # 4. Appliquer le Grand Master et mapper via le patch
-        new_frame = bytearray(512)
-        for circuit, value in htp_output.items():
-            final_value = self.grand_master.apply(value)
-            dmx_channel = self.patch.get_dmx_channel(circuit)
-            if 1 <= dmx_channel <= 512:
-                idx = dmx_channel - 1
-                if final_value > new_frame[idx]:
-                    new_frame[idx] = final_value
-    
-        # 4. Appliquer d'un seul coup (atomique)
-        self.dmx_buffer.set_frame(new_frame)
+        with self._dmx_lock:
+            # 1. Sorties des faders
+            htp_output = self.faders.compute_htp()
+ 
+            # 2. Combiner avec les niveaux directs des circuits (HTP)
+            circuit_output = self.circuits.get_output()
+            for circuit, value in circuit_output.items():
+                if value > htp_output.get(circuit, 0):
+                    htp_output[circuit] = value
+ 
+            # 3. Combiner avec la sortie du séquenceur (HTP)
+            seq_output = self.sequencer.get_output()
+            for circuit, value in seq_output.items():
+                if value > htp_output.get(circuit, 0):
+                    htp_output[circuit] = value
+ 
+            # 4. Appliquer le Grand Master et mapper via le patch
+            new_frame = bytearray(512)
+            for circuit, value in htp_output.items():
+                final_value = self.grand_master.apply(value)
+                dmx_channel = self.patch.get_dmx_channel(circuit)
+                if 1 <= dmx_channel <= 512:
+                    idx = dmx_channel - 1
+                    if final_value > new_frame[idx]:
+                        new_frame[idx] = final_value
+ 
+            # 5. Appliquer d'un seul coup (atomique)
+            self.dmx_buffer.set_frame(new_frame)
 
     # --- Callbacks événements ---
 

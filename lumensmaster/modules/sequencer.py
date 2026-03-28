@@ -11,10 +11,15 @@ Le séquenceur gère une liste ordonnée de cues, chacune contenant :
 Crossfade :
     - Mode temporisé : GO déclenche un fondu selon les temps de la cue cible
     - Mode manuel : un slider (0.0 à 1.0) contrôle la progression
+      En mode manuel, les temps de fade et delay sont ignorés.
     - Pause : fige la transition en cours (mode temporisé uniquement)
 
     Canaux montants (UP) : delay_in → fade_in
     Canaux descendants (DOWN) : delay_out → fade_out
+
+Thread safety :
+    Un verrou (_lock) protège toutes les transitions d'état du crossfade
+    pour éviter les race conditions entre le thread crossfade et le thread UI.
 """
 
 from __future__ import annotations
@@ -84,33 +89,27 @@ class Cue:
 
 class Sequencer:
     """
-    Séquenceur de cues avec crossfade.
+    Séquenceur de cues avec crossfade thread-safe.
 
     Utilisation :
         seq = Sequencer(bus)
-
-        # Créer des cues
         seq.add_cue(Cue(number=1.0, name="Noir", contents={}))
-        seq.add_cue(Cue(number=2.0, name="Plein feux", contents={1: 255, 2: 255}))
-
-        # Naviguer
-        seq.go()          # Lance le crossfade vers la cue suivante
-        seq.go_back()     # Retour à la cue précédente
-        seq.pause()       # Fige le crossfade en cours
-
-        # Crossfade manuel
-        seq.set_manual_progress(0.5)  # 50% du crossfade
-
-        # Récupérer la sortie pour le HTP
+        seq.add_cue(Cue(number=2.0, name="Plein feux", contents={1: 255}))
+        seq.go()
         output = seq.get_output()
     """
 
-    CROSSFADE_FPS = 40  # Fréquence de mise à jour du crossfade
+    CROSSFADE_FPS = 40
 
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
         self._cues: list[Cue] = []
-        self._current_index: int = -1  # -1 = aucune cue active
+        self._current_index: int = -1
+
+        # Verrou réentrant pour protéger les transitions d'état
+        # RLock car les callbacks d'événements peuvent rappeler get_output()
+        # sur le même thread qui tient déjà le verrou
+        self._lock = threading.RLock()
 
         # État du crossfade
         self._mode = CrossfadeMode.IDLE
@@ -128,9 +127,6 @@ class Sequencer:
         self._crossfade_start_time: float = 0.0
         self._crossfade_pause_elapsed: float = 0.0
         self._crossfade_target_cue: Cue | None = None
-
-        # Progression du crossfade (0.0 à 1.0 pour chaque circuit)
-        self._channel_progress: dict[int, float] = {}
 
         # Mode manuel
         self._manual_progress: float = 0.0
@@ -160,7 +156,6 @@ class Sequencer:
 
     @property
     def next_cue(self) -> Cue | None:
-        """La cue suivante (preset)."""
         next_idx = self._current_index + 1
         if 0 <= next_idx < len(self._cues):
             return self._cues[next_idx]
@@ -176,13 +171,12 @@ class Sequencer:
 
     @property
     def is_crossfading(self) -> bool:
-        return self._mode in (CrossfadeMode.TIMED, CrossfadeMode.MANUAL, CrossfadeMode.PAUSED)
+        return self._mode in (CrossfadeMode.TIMED, CrossfadeMode.MANUAL,
+                              CrossfadeMode.PAUSED)
 
     # --- Gestion des cues ---
 
     def add_cue(self, cue: Cue) -> None:
-        """Ajoute une cue et trie la liste par numéro."""
-        # Vérifier que le numéro n'existe pas déjà
         for existing in self._cues:
             if abs(existing.number - cue.number) < 0.001:
                 logger.warning("Cue %.1f existe déjà", cue.number)
@@ -195,28 +189,21 @@ class Sequencer:
                      cue.number, cue.name, len(cue.contents))
 
     def update_cue(self, cue_number: float, **kwargs) -> bool:
-        """Met à jour les propriétés d'une cue existante."""
         cue = self.get_cue(cue_number)
         if cue is None:
             return False
-
         for key, value in kwargs.items():
             if hasattr(cue, key):
                 setattr(cue, key, value)
-
-        # Si le numéro a changé, retrier
         if "number" in kwargs:
             self._cues.sort(key=lambda c: c.number)
-
         self._bus.emit("sequencer.cues_changed")
         return True
 
     def delete_cue(self, cue_number: float) -> bool:
-        """Supprime une cue par son numéro."""
         for i, cue in enumerate(self._cues):
             if abs(cue.number - cue_number) < 0.001:
                 self._cues.pop(i)
-                # Ajuster l'index courant si nécessaire
                 if self._current_index >= len(self._cues):
                     self._current_index = len(self._cues) - 1
                 elif self._current_index > i:
@@ -227,151 +214,142 @@ class Sequencer:
         return False
 
     def get_cue(self, cue_number: float) -> Cue | None:
-        """Retourne une cue par son numéro."""
         for cue in self._cues:
             if abs(cue.number - cue_number) < 0.001:
                 return cue
         return None
 
     def get_next_free_number(self) -> float:
-        """Retourne le prochain numéro de cue disponible."""
         if not self._cues:
             return 1.0
         return float(int(self._cues[-1].number) + 1)
 
     def get_insert_number(self, before: float, after: float) -> float:
-        """Calcule un numéro de cue entre deux cues existantes."""
         return round((before + after) / 2, 1)
 
     # --- Navigation / GO ---
 
     def go(self) -> None:
-        """
-        Lance le crossfade vers la cue suivante.
-        Si un crossfade est en cours, le complète instantanément puis passe à la suivante.
-        """
+        """Lance le crossfade vers la cue suivante."""
         if not self._cues:
             return
 
-        # Si un crossfade est en cours, le compléter d'abord
-        if self.is_crossfading:
-            self._complete_crossfade()
+        with self._lock:
+            if self.is_crossfading:
+                self._complete_crossfade_locked()
 
-        # Déterminer la cue cible
-        next_index = self._current_index + 1
-        if next_index >= len(self._cues):
-            logger.info("Fin de séquence, pas de cue suivante")
-            return
+            next_index = self._current_index + 1
+            if next_index >= len(self._cues):
+                logger.info("Fin de séquence, pas de cue suivante")
+                return
 
-        self._start_crossfade(next_index)
+            self._start_crossfade_locked(next_index)
 
     def go_back(self) -> None:
         """Lance le crossfade vers la cue précédente."""
         if not self._cues:
             return
 
-        if self.is_crossfading:
-            self._complete_crossfade()
+        with self._lock:
+            if self.is_crossfading:
+                self._complete_crossfade_locked()
 
-        prev_index = self._current_index - 1
-        if prev_index < 0:
-            logger.info("Début de séquence, pas de cue précédente")
-            return
+            prev_index = self._current_index - 1
+            if prev_index < 0:
+                logger.info("Début de séquence, pas de cue précédente")
+                return
 
-        self._start_crossfade(prev_index)
+            self._start_crossfade_locked(prev_index)
 
     def go_to_cue(self, cue_number: float) -> None:
         """Saute directement à une cue spécifique."""
         for i, cue in enumerate(self._cues):
             if abs(cue.number - cue_number) < 0.001:
-                if self.is_crossfading:
-                    self._complete_crossfade()
-                self._start_crossfade(i)
+                with self._lock:
+                    if self.is_crossfading:
+                        self._complete_crossfade_locked()
+                    self._start_crossfade_locked(i)
                 return
 
     def pause(self) -> None:
         """Met en pause ou reprend le crossfade temporisé."""
-        if self._mode == CrossfadeMode.TIMED:
-            self._crossfade_pause_elapsed = time.perf_counter() - self._crossfade_start_time
-            self._mode = CrossfadeMode.PAUSED
-            self._crossfade_running = False
-            self._bus.emit("sequencer.state_changed")
-            logger.info("Crossfade en pause")
-        elif self._mode == CrossfadeMode.PAUSED:
-            # Reprendre : recalculer le start time pour compenser la pause
-            self._crossfade_start_time = time.perf_counter() - self._crossfade_pause_elapsed
-            self._mode = CrossfadeMode.TIMED
-            self._start_crossfade_thread()
-            self._bus.emit("sequencer.state_changed")
-            logger.info("Crossfade repris")
+        with self._lock:
+            if self._mode == CrossfadeMode.TIMED:
+                self._crossfade_pause_elapsed = (
+                    time.perf_counter() - self._crossfade_start_time)
+                self._mode = CrossfadeMode.PAUSED
+                self._crossfade_running = False
+                logger.info("Crossfade en pause")
+            elif self._mode == CrossfadeMode.PAUSED:
+                self._crossfade_start_time = (
+                    time.perf_counter() - self._crossfade_pause_elapsed)
+                self._mode = CrossfadeMode.TIMED
+                self._start_crossfade_thread()
+                logger.info("Crossfade repris")
+
+        self._bus.emit("sequencer.state_changed")
 
     # --- Crossfade manuel ---
 
     def set_manual_mode(self, enabled: bool) -> None:
         """Active ou désactive le mode crossfade manuel."""
-        if enabled and self._mode == CrossfadeMode.IDLE:
-            # Préparer le crossfade vers la prochaine cue
-            next_index = self._current_index + 1
-            if next_index >= len(self._cues):
-                return
-            self._target_index = next_index
-            target_cue = self._cues[next_index]
-            self._target_levels = dict(target_cue.contents)
-            self._crossfade_target_cue = target_cue
-            self._manual_progress = 0.0
-            self._global_progress = 0.0
-            self._mode = CrossfadeMode.MANUAL
-            self._bus.emit("sequencer.state_changed")
-            logger.info("Mode crossfade manuel activé")
-        elif not enabled and self._mode == CrossfadeMode.MANUAL:
-            if self._manual_progress >= 0.99:
-                self._complete_crossfade()
-            else:
-                # Annuler le crossfade manuel
+        with self._lock:
+            if enabled and self._mode == CrossfadeMode.IDLE:
+                next_index = self._current_index + 1
+                if next_index >= len(self._cues):
+                    return
+                self._target_index = next_index
+                target_cue = self._cues[next_index]
+                self._target_levels = dict(target_cue.contents)
+                self._crossfade_target_cue = target_cue
+                self._manual_progress = 0.0
+                self._global_progress = 0.0
+                self._mode = CrossfadeMode.MANUAL
+                logger.info("Mode crossfade manuel activé")
+            elif not enabled and self._mode == CrossfadeMode.MANUAL:
                 self._mode = CrossfadeMode.IDLE
                 self._global_progress = 0.0
-                self._bus.emit("sequencer.state_changed")
-                self._bus.emit("sequencer.output_changed")
+
+        self._bus.emit("sequencer.state_changed")
+        self._bus.emit("sequencer.output_changed")
 
     def set_manual_progress(self, progress: float) -> None:
         """
         Définit la progression du crossfade manuel (0.0 à 1.0).
-        Utilisé par le slider UI ou un contrôleur MIDI.
+        En mode manuel, les temps de fade et delay sont ignorés :
+        la progression est appliquée linéairement à tous les circuits.
         """
-        if self._mode != CrossfadeMode.MANUAL:
-            return
+        with self._lock:
+            if self._mode != CrossfadeMode.MANUAL:
+                return
+            self._manual_progress = max(0.0, min(1.0, progress))
+            self._global_progress = self._manual_progress
 
-        self._manual_progress = max(0.0, min(1.0, progress))
-        self._global_progress = self._manual_progress
+        # Émissions hors du lock pour éviter deadlocks
         self._bus.emit("sequencer.output_changed")
-        self._bus.emit("sequencer.progress_changed", progress=self._global_progress)
+        self._bus.emit("sequencer.progress_changed",
+                       progress=self._global_progress)
 
-        # Si on atteint 1.0, compléter le crossfade
-        if self._manual_progress >= 0.99:
-            self._complete_crossfade()
+    def complete_manual(self) -> None:
+        """Complète le crossfade manuel (appelé quand le slider atteint 100%)."""
+        with self._lock:
+            if self._mode == CrossfadeMode.MANUAL:
+                self._complete_crossfade_locked()
 
     # --- Crossfade temporisé (interne) ---
 
-    def _start_crossfade(self, target_index: int) -> None:
-        """Démarre un crossfade vers la cue à l'index donné."""
+    def _start_crossfade_locked(self, target_index: int) -> None:
+        """Démarre un crossfade. Doit être appelé avec le lock acquis."""
         self._target_index = target_index
         target_cue = self._cues[target_index]
         self._target_levels = dict(target_cue.contents)
         self._crossfade_target_cue = target_cue
-
-        # Calculer le temps total max du crossfade
-        max_time = max(
-            target_cue.delay_in + target_cue.fade_in,
-            target_cue.delay_out + target_cue.fade_out,
-            0.01,  # au minimum
-        )
 
         self._crossfade_start_time = time.perf_counter()
         self._crossfade_pause_elapsed = 0.0
         self._global_progress = 0.0
         self._mode = CrossfadeMode.TIMED
 
-        self._bus.emit("sequencer.state_changed")
         logger.info(
             "Crossfade vers cue %.1f '%s' (in=%.1f+%.1f, out=%.1f+%.1f)",
             target_cue.number, target_cue.name,
@@ -380,9 +358,9 @@ class Sequencer:
         )
 
         self._start_crossfade_thread()
+        self._bus.emit("sequencer.state_changed")
 
     def _start_crossfade_thread(self) -> None:
-        """Démarre le thread de mise à jour du crossfade."""
         self._crossfade_running = True
         self._crossfade_thread = threading.Thread(
             target=self._crossfade_loop,
@@ -392,60 +370,66 @@ class Sequencer:
         self._crossfade_thread.start()
 
     def _crossfade_loop(self) -> None:
-        """Boucle du thread crossfade : met à jour la progression."""
+        """Boucle du thread crossfade."""
         interval = 1.0 / self.CROSSFADE_FPS
 
         while self._crossfade_running and self._mode == CrossfadeMode.TIMED:
             start = time.perf_counter()
 
-            elapsed = time.perf_counter() - self._crossfade_start_time
-            target_cue = self._crossfade_target_cue
-            if target_cue is None:
-                break
-
-            # Calculer la progression globale
-            max_time = max(
-                target_cue.delay_in + target_cue.fade_in,
-                target_cue.delay_out + target_cue.fade_out,
-                0.01,
-            )
-            self._global_progress = min(1.0, elapsed / max_time)
-
-            # Émettre les mises à jour
-            self._bus.emit("sequencer.output_changed")
-            self._bus.emit("sequencer.progress_changed", progress=self._global_progress)
-
-            # Vérifier si le crossfade est terminé
-            all_done = True
-            for circuit in set(self._onstage_levels.keys()) | set(self._target_levels.keys()):
-                progress = self._compute_channel_progress(circuit, elapsed, target_cue)
-                if progress < 1.0:
-                    all_done = False
+            with self._lock:
+                if self._mode != CrossfadeMode.TIMED:
                     break
 
-            if all_done:
-                self._complete_crossfade()
-                break
+                elapsed = time.perf_counter() - self._crossfade_start_time
+                target_cue = self._crossfade_target_cue
+                if target_cue is None:
+                    break
 
-            # Timing
+                max_time = max(
+                    target_cue.delay_in + target_cue.fade_in,
+                    target_cue.delay_out + target_cue.fade_out,
+                    0.01,
+                )
+                self._global_progress = min(1.0, elapsed / max_time)
+
+                # Vérifier si terminé
+                all_done = True
+                all_circuits = (set(self._onstage_levels.keys())
+                                | set(self._target_levels.keys()))
+                for circuit in all_circuits:
+                    progress = self._compute_channel_progress(
+                        circuit, elapsed, target_cue)
+                    if progress < 1.0:
+                        all_done = False
+                        break
+
+                if all_done:
+                    self._complete_crossfade_locked()
+                    # Émettre hors du lock
+                    break
+
+            # Émissions hors du lock
+            self._bus.emit("sequencer.output_changed")
+            self._bus.emit("sequencer.progress_changed",
+                           progress=self._global_progress)
+
             sleep_time = interval - (time.perf_counter() - start)
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _compute_channel_progress(self, circuit: int, elapsed: float, target_cue: Cue) -> float:
-        """Calcule la progression d'un circuit individuel pendant un crossfade temporisé."""
+    def _compute_channel_progress(self, circuit: int, elapsed: float,
+                                  target_cue: Cue) -> float:
+        """Calcule la progression d'un circuit (mode temporisé uniquement)."""
         current_level = self._onstage_levels.get(circuit, 0)
         target_level = self._target_levels.get(circuit, 0)
 
         if current_level == target_level:
-            return 1.0  # Pas de changement
+            return 1.0
 
         if target_level > current_level:
-            # Canal montant → utilise delay_in + fade_in
             delay = target_cue.delay_in
             fade = target_cue.fade_in
         else:
-            # Canal descendant → utilise delay_out + fade_out
             delay = target_cue.delay_out
             fade = target_cue.fade_out
 
@@ -456,21 +440,35 @@ class Sequencer:
         else:
             return min(1.0, (elapsed - delay) / fade)
 
-    def _complete_crossfade(self) -> None:
-        """Complète instantanément le crossfade en cours."""
+    def _complete_crossfade_locked(self) -> None:
+        """
+        Complète instantanément le crossfade en cours.
+        DOIT être appelé avec self._lock acquis.
+
+        L'ordre est critique :
+            1. Copier les niveaux cible dans onstage
+            2. Passer en IDLE (pour que get_output retourne onstage)
+            3. Nettoyer l'état
+            4. Émettre les événements (safe car RLock réentrant)
+        """
         self._crossfade_running = False
 
+        # 1. Copier les niveaux cible
         if self._target_index >= 0:
             self._current_index = self._target_index
             self._onstage_levels = dict(self._target_levels)
 
+        # 2. Passer en IDLE AVANT de nettoyer
+        self._mode = CrossfadeMode.IDLE
+        self._global_progress = 0.0
+        self._manual_progress = 0.0
+
+        # 3. Nettoyer (maintenant que mode=IDLE, get_output ne lit plus target)
         self._target_index = -1
         self._target_levels.clear()
         self._crossfade_target_cue = None
-        self._manual_progress = 0.0
-        self._global_progress = 0.0
-        self._mode = CrossfadeMode.IDLE
 
+        # 4. Émettre et gérer le link
         self._bus.emit("sequencer.state_changed")
         self._bus.emit("sequencer.output_changed")
         self._bus.emit("sequencer.progress_changed", progress=0.0)
@@ -478,14 +476,12 @@ class Sequencer:
         current = self.current_cue
         if current:
             logger.info("Cue %.1f '%s' onstage", current.number, current.name)
-
-            # Gestion du Link : enchainement automatique
             if current.link_time > 0:
-                logger.info("Link actif : GO auto dans %.1fs", current.link_time)
+                logger.info("Link actif : GO auto dans %.1fs",
+                            current.link_time)
                 threading.Timer(current.link_time, self._link_go).start()
 
     def _link_go(self) -> None:
-        """Appelé par le timer de link pour déclencher un GO automatique."""
         if self._mode == CrossfadeMode.IDLE:
             self.go()
 
@@ -494,48 +490,49 @@ class Sequencer:
     def get_output(self) -> dict[int, int]:
         """
         Calcule la sortie actuelle du séquenceur.
-        Pendant un crossfade, interpole entre onstage et target.
-
-        Returns:
-            {circuit: level} pour le calcul HTP.
+        Thread-safe grâce au lock.
         """
-        if self._mode == CrossfadeMode.IDLE:
-            return dict(self._onstage_levels)
+        with self._lock:
+            if self._mode == CrossfadeMode.IDLE:
+                return dict(self._onstage_levels)
 
-        # Pendant un crossfade : interpoler
-        output: dict[int, int] = {}
-        all_circuits = set(self._onstage_levels.keys()) | set(self._target_levels.keys())
+            output: dict[int, int] = {}
+            all_circuits = (set(self._onstage_levels.keys())
+                            | set(self._target_levels.keys()))
 
-        for circuit in all_circuits:
-            current_level = self._onstage_levels.get(circuit, 0)
-            target_level = self._target_levels.get(circuit, 0)
+            for circuit in all_circuits:
+                current_level = self._onstage_levels.get(circuit, 0)
+                target_level = self._target_levels.get(circuit, 0)
 
-            if self._mode == CrossfadeMode.MANUAL:
-                # Mode manuel : interpolation linéaire globale
-                progress = self._manual_progress
-            elif self._mode in (CrossfadeMode.TIMED, CrossfadeMode.PAUSED):
-                # Mode temporisé : progression par canal
-                if self._crossfade_target_cue and self._mode == CrossfadeMode.TIMED:
-                    elapsed = time.perf_counter() - self._crossfade_start_time
-                    progress = self._compute_channel_progress(
-                        circuit, elapsed, self._crossfade_target_cue)
-                elif self._mode == CrossfadeMode.PAUSED:
-                    elapsed = self._crossfade_pause_elapsed
-                    progress = self._compute_channel_progress(
-                        circuit, elapsed, self._crossfade_target_cue) if self._crossfade_target_cue else 0.0
+                if self._mode == CrossfadeMode.MANUAL:
+                    # Mode manuel : interpolation linéaire globale
+                    # Les temps de fade/delay sont IGNORÉS
+                    progress = self._manual_progress
+
+                elif self._mode in (CrossfadeMode.TIMED, CrossfadeMode.PAUSED):
+                    # Mode temporisé : progression par canal avec fade/delay
+                    target_cue = self._crossfade_target_cue
+                    if target_cue is None:
+                        progress = 0.0
+                    elif self._mode == CrossfadeMode.TIMED:
+                        elapsed = time.perf_counter() - self._crossfade_start_time
+                        progress = self._compute_channel_progress(
+                            circuit, elapsed, target_cue)
+                    else:  # PAUSED
+                        elapsed = self._crossfade_pause_elapsed
+                        progress = self._compute_channel_progress(
+                            circuit, elapsed, target_cue)
                 else:
                     progress = 0.0
-            else:
-                progress = 0.0
 
-            # Interpoler
-            interpolated = int(current_level + progress * (target_level - current_level))
-            interpolated = max(0, min(255, interpolated))
+                interpolated = int(
+                    current_level + progress * (target_level - current_level))
+                interpolated = max(0, min(255, interpolated))
 
-            if interpolated > 0:
-                output[circuit] = interpolated
+                if interpolated > 0:
+                    output[circuit] = interpolated
 
-        return output
+            return output
 
     # --- Enregistrement ---
 
@@ -543,10 +540,6 @@ class Sequencer:
                    fade_in: float = 3.0, fade_out: float = 3.0,
                    delay_in: float = 0.0, delay_out: float = 0.0,
                    link_time: float = 0.0) -> Cue:
-        """
-        Enregistre une nouvelle cue à partir d'un contenu.
-        Si le numéro existe déjà, met à jour la cue existante.
-        """
         existing = self.get_cue(number)
         if existing:
             existing.name = name
@@ -561,13 +554,9 @@ class Sequencer:
             return existing
 
         cue = Cue(
-            number=number,
-            name=name,
-            contents=dict(contents),
-            fade_in=fade_in,
-            fade_out=fade_out,
-            delay_in=delay_in,
-            delay_out=delay_out,
+            number=number, name=name, contents=dict(contents),
+            fade_in=fade_in, fade_out=fade_out,
+            delay_in=delay_in, delay_out=delay_out,
             link_time=link_time,
         )
         self.add_cue(cue)
@@ -579,7 +568,8 @@ class Sequencer:
         return {
             "cues": [cue.to_dict() for cue in self._cues],
             "current_index": self._current_index,
-            "onstage_levels": {str(k): v for k, v in self._onstage_levels.items()},
+            "onstage_levels": {
+                str(k): v for k, v in self._onstage_levels.items()},
         }
 
     def from_dict(self, data: dict[str, Any]) -> None:
