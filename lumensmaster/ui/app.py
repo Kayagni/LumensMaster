@@ -31,6 +31,9 @@ class App:
         self._faders_view: FadersView | None = None
         self._port_combo: int = 0
         self._sequencer_view: SequencerView | None = None
+        self._file_dialog_save: int = 0
+        self._file_dialog_open: int = 0
+        self._show_name_input: int = 0
 
     def run(self, dummy_dmx: bool = False) -> None:
         """Lance l'application (bloquant)."""
@@ -88,6 +91,31 @@ class App:
         self._sequencer_view = SequencerView(self._engine)
         self._sequencer_view.build()
 
+        # File dialogs (créés au niveau racine, pas dans une fenêtre)
+        with dpg.file_dialog(
+            label="Ouvrir un show",
+            directory_selector=False,
+            show=False,
+            callback=self._on_open_file_selected,
+            cancel_callback=lambda: None,
+            width=700,
+            height=400,
+        ) as self._file_dialog_open:
+            dpg.add_file_extension(".lms", color=(0, 255, 0, 255))
+            dpg.add_file_extension(".*")
+ 
+        with dpg.file_dialog(
+            label="Sauvegarder le show",
+            directory_selector=False,
+            show=False,
+            callback=self._on_save_file_selected,
+            cancel_callback=lambda: None,
+            width=700,
+            height=400,
+        ) as self._file_dialog_save:
+            dpg.add_file_extension(".lms", color=(0, 255, 0, 255))
+            dpg.add_file_extension(".*")
+
     def _build_toolbar(self) -> None:
         """Construit la barre d'outils supérieure."""
         with dpg.group(horizontal=True):
@@ -119,12 +147,19 @@ class App:
             # --- Show ---
             dpg.add_text("Show :", color=Colors.TEXT_SECONDARY)
             dpg.add_spacer(width=4)
-
+ 
+            self._show_name_input = dpg.add_input_text(
+                default_value=self._engine.show_name,
+                width=150,
+                hint="Nom du show",
+                on_enter=True,
+                callback=self._on_show_name_changed,
+            )
+ 
             dpg.add_button(label="Nouveau", callback=self._on_new_show)
             dpg.add_button(label="Ouvrir", callback=self._on_open_show)
             dpg.add_button(label="Sauvegarder", callback=self._on_save_show)
-
-            dpg.add_spacer(width=24)
+            dpg.add_button(label="Sauv. sous", callback=self._on_save_as_show)
 
             # --- Fenêtres ---
             dpg.add_text("Fenetres :", color=Colors.TEXT_SECONDARY)
@@ -180,18 +215,65 @@ class App:
 
     # --- Callbacks Show ---
 
+    def _on_show_name_changed(self, sender: int, value: str) -> None:
+        """Met à jour le nom du show dans les metadata."""
+        self._engine._show_data.setdefault("metadata", {})["name"] = value
+        self._engine._dirty = True
+        self._update_status_show()
+ 
     def _on_new_show(self) -> None:
         self._engine.new_show()
+        self._refresh_all_views()
         self._update_status_show()
-
+        dpg.set_value(self._show_name_input, self._engine.show_name)
+ 
     def _on_open_show(self) -> None:
-        logger.info("Ouvrir un show (a implementer avec file dialog)")
-
+        """Affiche le file dialog d'ouverture."""
+        dpg.show_item(self._file_dialog_open)
+ 
     def _on_save_show(self) -> None:
+        """Sauvegarde : si chemin connu, sauvegarde directement. Sinon, file dialog."""
         if self._engine.save_current_show():
             self._update_status_show()
         else:
-            logger.info("Sauvegarder sous (a implementer avec file dialog)")
+            dpg.show_item(self._file_dialog_save)
+ 
+    def _on_save_as_show(self) -> None:
+        """Affiche le file dialog de sauvegarde (forcer un nouveau chemin)."""
+        dpg.show_item(self._file_dialog_save)
+ 
+    def _on_open_file_selected(self, sender: int, app_data: dict) -> None:
+        """Callback du file dialog d'ouverture."""
+        selections = app_data.get("selections", {})
+        if not selections:
+            return
+        filepath = list(selections.values())[0]
+        if self._engine.load_existing_show(filepath):
+            self._refresh_all_views()
+            self._update_status_show()
+            dpg.set_value(self._show_name_input, self._engine.show_name)
+            logger.info("Show ouvert : %s", filepath)
+        else:
+            logger.error("Impossible d'ouvrir le show : %s", filepath)
+ 
+    def _on_save_file_selected(self, sender: int, app_data: dict) -> None:
+        """Callback du file dialog de sauvegarde."""
+        file_path_name = app_data.get("file_path_name", "")
+        if not file_path_name:
+            return
+        if not file_path_name.endswith(".lms"):
+            file_path_name += ".lms"
+ 
+        # Mettre à jour le nom du show depuis le champ de saisie
+        current_name = dpg.get_value(self._show_name_input)
+        if current_name:
+            self._engine._show_data.setdefault("metadata", {})["name"] = current_name
+ 
+        if self._engine.save_current_show(file_path_name):
+            self._update_status_show()
+            logger.info("Show sauvegardé : %s", file_path_name)
+        else:
+            logger.error("Impossible de sauvegarder le show")
 
     # --- Callbacks Fenêtres ---
 
@@ -232,3 +314,13 @@ class App:
         name = self._engine.show_name
         dirty = " *" if self._engine.is_dirty else ""
         dpg.set_value("status_show", f"Show : {name}{dirty}")
+
+    def _refresh_all_views(self) -> None:
+        """Rafraîchit toutes les vues après chargement d'un show."""
+        self._engine.bus.emit("sequencer.cues_changed")
+        self._engine.bus.emit("sequencer.state_changed")
+        self._engine.bus.emit("sequencer.output_changed")
+        if self._circuits_view:
+            self._circuits_view._rebuild_all_sections()
+        if self._faders_view:
+            self._faders_view._update_all_displays()
