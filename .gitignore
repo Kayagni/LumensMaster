@@ -30,3 +30,6 @@ Thumbs.db
 # Project specific
 *.dmx
 *.log
+
+# Dossiers
+assets/fixtures/
