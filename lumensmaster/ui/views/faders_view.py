@@ -178,16 +178,16 @@ class FadersView:
             dpg.add_text("Valeur :", color=Colors.TEXT_SECONDARY)
             self._input_widget = dpg.add_input_text(
                 width=80, hint="0-255", on_enter=True, callback=self._on_value_input)
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="Full", width=50,
+            dpg.add_spacer(width=4)
+            dpg.add_button(label="Full", width=45,
                            callback=lambda: self._set_selected_value(255))
-            dpg.add_button(label="Zero", width=50,
+            dpg.add_button(label="Zero", width=45,
                            callback=lambda: self._set_selected_value(0))
-            dpg.add_spacer(width=16)
+            dpg.add_spacer(width=12)
             dpg.add_text("Affichage :", color=Colors.TEXT_SECONDARY)
             dpg.add_radio_button(items=["DMX", "%"], default_value="DMX",
                                  horizontal=True, callback=self._on_display_mode_changed)
-            dpg.add_spacer(width=16)
+            dpg.add_spacer(width=12)
             dpg.add_button(label="Clear sel.", callback=self._clear_selected)
             dpg.add_button(label="Clear tout", callback=self._clear_all)
 
@@ -196,34 +196,34 @@ class FadersView:
             dpg.add_text("Col:", color=Colors.TEXT_SECONDARY)
             self._columns_widget = dpg.add_input_int(
                 default_value=self._columns, min_value=1, max_value=512,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_columns_changed)
-            dpg.add_spacer(width=8)
+            dpg.add_spacer(width=4)
             dpg.add_text("Lig:", color=Colors.TEXT_SECONDARY)
             self._rows_widget = dpg.add_input_int(
                 default_value=self._rows, min_value=1, max_value=512,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_rows_changed)
-            dpg.add_spacer(width=8)
+            dpg.add_spacer(width=4)
             dpg.add_text("Faders:", color=Colors.TEXT_SECONDARY)
             self._fader_count_widget = dpg.add_input_int(
                 default_value=self._fader_count, min_value=1,
                 max_value=self._engine.faders.count,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_fader_count_changed)
-            dpg.add_spacer(width=16)
-            dpg.add_text("Fader :", color=Colors.TEXT_SECONDARY)
-            dpg.add_text("L:", color=Colors.TEXT_SECONDARY)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Fader L:", color=Colors.TEXT_SECONDARY)
             self._fader_width_widget = dpg.add_input_int(
                 default_value=self._fader_width,
                 min_value=MIN_FADER_WIDTH, max_value=MAX_FADER_WIDTH,
-                min_clamped=True, max_clamped=True, width=80,
+                min_clamped=True, max_clamped=True, width=70,
                 callback=self._on_fader_size_changed)
+            dpg.add_spacer(width=4)
             dpg.add_text("H:", color=Colors.TEXT_SECONDARY)
             self._slider_height_widget = dpg.add_input_int(
                 default_value=self._slider_height,
                 min_value=MIN_SLIDER_HEIGHT, max_value=MAX_SLIDER_HEIGHT,
-                min_clamped=True, max_clamped=True, width=80,
+                min_clamped=True, max_clamped=True, width=70,
                 callback=self._on_fader_size_changed)
             dpg.add_spacer(width=8)
             dpg.add_button(label="Reset layout", callback=self._reset_layout)

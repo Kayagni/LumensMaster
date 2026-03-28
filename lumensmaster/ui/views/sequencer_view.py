@@ -166,114 +166,93 @@ class SequencerView:
     # --- Transport ---
 
     def _build_transport(self) -> None:
-        # Ligne 1 : boutons de transport + info
+        # Ligne 1 : boutons de transport
         with dpg.group(horizontal=True):
-            dpg.add_button(label="GO", width=80, height=40,
+            dpg.add_button(label="GO", width=70, height=35,
                            callback=self._on_go)
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="GO BACK", width=80, height=40,
+            dpg.add_button(label="GO BACK", width=70, height=35,
                            callback=self._on_go_back)
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="PAUSE", width=80, height=40,
+            dpg.add_button(label="PAUSE", width=70, height=35,
                            callback=self._on_pause)
-            dpg.add_spacer(width=16)
+            dpg.add_spacer(width=12)
             dpg.add_text("GOTO:", color=Colors.TEXT_SECONDARY)
             self._goto_combo = dpg.add_combo(
-                items=self._get_cue_labels(), width=180, default_value="")
-            dpg.add_button(label="GOTO", width=60, height=40,
+                items=self._get_cue_labels(), width=160, default_value="")
+            dpg.add_button(label="GOTO", width=50, height=35,
                            callback=self._on_goto)
-
+ 
+        # Ligne 2 : infos onstage / preset / status
+        with dpg.group(horizontal=True):
+            self._onstage_text = dpg.add_text(
+                "Onstage : ---", color=Colors.SUCCESS)
             dpg.add_spacer(width=24)
-
-            # Infos onstage / preset
-            with dpg.group():
-                self._onstage_text = dpg.add_text(
-                    "Onstage : ---", color=Colors.SUCCESS)
-                self._preset_text = dpg.add_text(
-                    "Preset  : ---", color=Colors.ACCENT)
-
+            self._preset_text = dpg.add_text(
+                "Preset  : ---", color=Colors.ACCENT)
             dpg.add_spacer(width=24)
-
-            # Status
             self._status_text = dpg.add_text(
                 "IDLE", color=Colors.TEXT_SECONDARY)
-
-        dpg.add_spacer(height=4)
-
-        # Ligne 2 : crossfade
+ 
+        dpg.add_spacer(height=2)
+ 
+        # Ligne 3 : crossfade + manuel
         with dpg.group(horizontal=True):
             dpg.add_text("Crossfade :", color=Colors.TEXT_SECONDARY)
-            dpg.add_spacer(width=4)
-
-            # Barre de progression
             self._progress_bar = dpg.add_progress_bar(
-                default_value=0.0, width=300)
-
-            dpg.add_spacer(width=8)
+                default_value=0.0, width=200)
+            dpg.add_spacer(width=4)
             self._progress_text = dpg.add_text("0%", color=Colors.TEXT_SECONDARY)
-
-            dpg.add_spacer(width=16)
-
-            # Slider manuel
+            dpg.add_spacer(width=12)
             dpg.add_text("Manuel :", color=Colors.TEXT_SECONDARY)
             self._crossfade_slider = dpg.add_slider_int(
                 default_value=0, min_value=0, max_value=100,
-                width=200, format="%d%%",
+                width=160, format="%d%%",
                 callback=self._on_manual_slider,
             )
-
+ 
         self._update_transport_display()
 
     # --- Éditeur de cues ---
 
     def _build_cue_editor(self) -> None:
-        # Ligne 1 : Enregistrer une nouvelle cue
+        # Ligne 1 : numéro + nom
         with dpg.group(horizontal=True):
-            dpg.add_text("Nouvelle cue :", color=Colors.TEXT_SECONDARY)
-            dpg.add_spacer(width=4)
-
-            dpg.add_text("N:", color=Colors.TEXT_SECONDARY)
+            dpg.add_text("Cue N:", color=Colors.TEXT_SECONDARY)
             self._rec_number_input = dpg.add_input_float(
                 default_value=self._engine.sequencer.get_next_free_number(),
-                width=100, format="%.1f", step=0.1)
-
+                width=80, format="%.1f", step=0.1)
+            dpg.add_spacer(width=4)
             dpg.add_text("Nom:", color=Colors.TEXT_SECONDARY)
             self._rec_name_input = dpg.add_input_text(
                 width=150, hint="Nom de la cue")
-
-            dpg.add_spacer(width=8)
-
+ 
+        # Ligne 2 : temps
+        with dpg.group(horizontal=True):
             dpg.add_text("In:", color=Colors.TEXT_SECONDARY)
             self._rec_fade_in = dpg.add_input_float(
-                default_value=3.0, width=100, format="%.1f", step=0.5)
+                default_value=3.0, width=70, format="%.1f", step=0.5)
             dpg.add_text("Out:", color=Colors.TEXT_SECONDARY)
             self._rec_fade_out = dpg.add_input_float(
-                default_value=3.0, width=100, format="%.1f", step=0.5)
+                default_value=3.0, width=70, format="%.1f", step=0.5)
             dpg.add_text("DIn:", color=Colors.TEXT_SECONDARY)
             self._rec_delay_in = dpg.add_input_float(
-                default_value=0.0, width=100, format="%.1f", step=0.5)
+                default_value=0.0, width=70, format="%.1f", step=0.5)
             dpg.add_text("DOut:", color=Colors.TEXT_SECONDARY)
             self._rec_delay_out = dpg.add_input_float(
-                default_value=0.0, width=100, format="%.1f", step=0.5)
+                default_value=0.0, width=70, format="%.1f", step=0.5)
             dpg.add_text("Link:", color=Colors.TEXT_SECONDARY)
             self._rec_link_time = dpg.add_input_float(
-                default_value=0.0, width=100, format="%.1f", step=0.5)
-
-        dpg.add_spacer(height=4)
-
-        # Ligne 2 : Boutons d'action
+                default_value=0.0, width=70, format="%.1f", step=0.5)
+ 
+        # Ligne 3 : boutons REC + suppression
         with dpg.group(horizontal=True):
-            dpg.add_button(label="REC (depuis circuits)",
+            dpg.add_button(label="REC (circuits)",
                            callback=self._on_record_from_circuits)
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="REC (depuis sortie DMX)",
+            dpg.add_button(label="REC (sortie DMX)",
                            callback=self._on_record_from_output)
-            dpg.add_spacer(width=24)
-
-            # Supprimer une cue
-            dpg.add_text("Supprimer cue :", color=Colors.TEXT_SECONDARY)
+            dpg.add_spacer(width=16)
+            dpg.add_text("Supprimer :", color=Colors.TEXT_SECONDARY)
             self._edit_cue_combo = dpg.add_combo(
-                items=self._get_cue_labels(), width=200, default_value="")
+                items=self._get_cue_labels(), width=160, default_value="")
             dpg.add_button(label="Supprimer", callback=self._on_delete_cue)
 
     # --- Liste des cues ---

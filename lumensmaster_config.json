@@ -64,13 +64,13 @@
         "cell_width": 52,
         "cell_height": 46,
         "categories": {
-          "valeurs": true,
+          "valeurs": false,
           "layout": false,
-          "groupes": false
+          "groupes": true
         },
         "pos_x": 4,
         "pos_y": 101,
-        "width": 513,
+        "width": 521,
         "height": 679
       },
       "faders": {
@@ -81,18 +81,18 @@
         "slider_height": 164,
         "categories": {
           "valeurs": true,
-          "layout": false
+          "layout": true
         },
         "pos_x": 525,
         "pos_y": 102,
-        "width": 719,
+        "width": 528,
         "height": 678
       },
       "sequencer": {
-        "visible": false,
+        "visible": true,
         "categories": {
           "transport": false,
-          "cues": true
+          "cues": false
         },
         "pos_x": 1062,
         "pos_y": 101,

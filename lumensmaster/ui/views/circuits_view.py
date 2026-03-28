@@ -188,23 +188,23 @@ class CircuitsView:
             dpg.add_text("Valeur :", color=Colors.TEXT_SECONDARY)
             self._input_widget = dpg.add_input_text(
                 width=80, hint="0-255", on_enter=True, callback=self._on_value_input)
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="Full", width=50,
+            dpg.add_spacer(width=4)
+            dpg.add_button(label="Full", width=45,
                            callback=lambda: self._set_selected_value(255))
-            dpg.add_button(label="Zero", width=50,
+            dpg.add_button(label="Zero", width=45,
                            callback=lambda: self._set_selected_value(0))
-            dpg.add_spacer(width=16)
+            dpg.add_spacer(width=12)
             dpg.add_text("Affichage :", color=Colors.TEXT_SECONDARY)
             dpg.add_radio_button(items=["DMX", "%"], default_value="DMX",
                                  horizontal=True, callback=self._on_display_mode_changed)
-            dpg.add_spacer(width=16)
-            dpg.add_text("Enregistrer sur :", color=Colors.TEXT_SECONDARY)
+        with dpg.group(horizontal=True):
+            dpg.add_text("REC sur fader :", color=Colors.TEXT_SECONDARY)
             self._record_fader_input = dpg.add_input_int(
                 default_value=1, min_value=1,
                 max_value=self._engine.faders.count,
-                min_clamped=True, max_clamped=True, width=100)
+                min_clamped=True, max_clamped=True, width=80)
             dpg.add_button(label="REC", callback=self._on_record_to_fader)
-            dpg.add_spacer(width=16)
+            dpg.add_spacer(width=12)
             dpg.add_button(label="Clear sel.", callback=self._clear_selected)
             dpg.add_button(label="Clear tout", callback=self._clear_all)
 
@@ -213,33 +213,33 @@ class CircuitsView:
             dpg.add_text("Col:", color=Colors.TEXT_SECONDARY)
             self._columns_widget = dpg.add_input_int(
                 default_value=self._columns, min_value=1, max_value=512,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_columns_changed)
-            dpg.add_spacer(width=8)
+            dpg.add_spacer(width=4)
             dpg.add_text("Lig:", color=Colors.TEXT_SECONDARY)
             self._rows_widget = dpg.add_input_int(
                 default_value=self._rows, min_value=1, max_value=512,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_rows_changed)
-            dpg.add_spacer(width=8)
+            dpg.add_spacer(width=4)
             dpg.add_text("Max:", color=Colors.TEXT_SECONDARY)
             self._max_circuits_widget = dpg.add_input_int(
                 default_value=self._max_circuits, min_value=1, max_value=512,
-                min_clamped=True, max_clamped=True, width=90,
+                min_clamped=True, max_clamped=True, width=80,
                 callback=self._on_max_circuits_changed)
-            dpg.add_spacer(width=16)
-            dpg.add_text("Cellule :", color=Colors.TEXT_SECONDARY)
-            dpg.add_text("L:", color=Colors.TEXT_SECONDARY)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Cellule L:", color=Colors.TEXT_SECONDARY)
             self._cell_width_widget = dpg.add_input_int(
                 default_value=self._cell_width,
                 min_value=MIN_CELL_SIZE, max_value=MAX_CELL_SIZE,
-                min_clamped=True, max_clamped=True, width=80,
+                min_clamped=True, max_clamped=True, width=70,
                 callback=self._on_cell_size_changed)
+            dpg.add_spacer(width=4)
             dpg.add_text("H:", color=Colors.TEXT_SECONDARY)
             self._cell_height_widget = dpg.add_input_int(
                 default_value=self._cell_height,
                 min_value=MIN_CELL_SIZE, max_value=MAX_CELL_SIZE,
-                min_clamped=True, max_clamped=True, width=80,
+                min_clamped=True, max_clamped=True, width=70,
                 callback=self._on_cell_size_changed)
             dpg.add_spacer(width=8)
             dpg.add_button(label="Reset layout", callback=self._reset_layout)
@@ -254,7 +254,7 @@ class CircuitsView:
             dpg.add_text("Ajouter a :", color=Colors.TEXT_SECONDARY)
             self._group_combo_add = dpg.add_combo(items=[], width=120, default_value="")
             dpg.add_button(label="+", width=30, callback=self._on_add_to_group)
-            dpg.add_spacer(width=12)
+        with dpg.group(horizontal=True):
             dpg.add_text("Retirer de :", color=Colors.TEXT_SECONDARY)
             self._group_combo_remove = dpg.add_combo(items=[], width=120, default_value="")
             dpg.add_button(label="-", width=30, callback=self._on_remove_from_group)
