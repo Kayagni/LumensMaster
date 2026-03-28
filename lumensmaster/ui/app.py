@@ -34,6 +34,8 @@ class App:
         self._file_dialog_save: int = 0
         self._file_dialog_open: int = 0
         self._show_name_input: int = 0
+        self._ws_profile_combo: int = 0
+        self._ws_profile_name_input: int = 0
 
     def run(self, dummy_dmx: bool = False) -> None:
         """Lance l'application (bloquant)."""
@@ -58,6 +60,11 @@ class App:
  
         # Démarrer le moteur
         self._engine.start(dummy_dmx=dummy_dmx)
+        
+        # Charger le profil workspace "Défaut" si existant
+        default_profile = self._engine.config.workspace_profiles.get("Défaut")
+        if default_profile:
+            self._apply_profile(default_profile)
  
         try:
             # Boucle de rendu manuelle (au lieu de dpg.start_dearpygui)
@@ -67,9 +74,15 @@ class App:
                 self._engine.sequencer.poll_ui()
                 dpg.render_dearpygui_frame()
         finally:
+            # Sauvegarder la disposition courante dans le dernier profil utilisé
+            current_profile_name = self._engine.config.last_workspace_profile
+            if current_profile_name:
+                self._engine.config.workspace_profiles[current_profile_name] = \
+                    self._capture_current_layout()
             self._engine.stop()
             self._engine.config.save()
             dpg.destroy_context()
+
 
     def _build_ui(self) -> None:
         """Construit l'interface graphique."""
@@ -117,13 +130,12 @@ class App:
             dpg.add_file_extension(".*")
 
     def _build_toolbar(self) -> None:
-        """Construit la barre d'outils supérieure."""
+        """Construit la barre d'outils supérieure (2 lignes)."""
+        # --- Ligne 1 : DMX + Show + Fenêtres ---
         with dpg.group(horizontal=True):
-            # Titre
             dpg.add_text(__app_name__, color=Colors.ACCENT)
             dpg.add_spacer(width=24)
 
-            # --- DMX ---
             dpg.add_text("DMX :", color=Colors.TEXT_SECONDARY)
             dpg.add_spacer(width=4)
 
@@ -144,10 +156,9 @@ class App:
 
             dpg.add_spacer(width=24)
 
-            # --- Show ---
             dpg.add_text("Show :", color=Colors.TEXT_SECONDARY)
             dpg.add_spacer(width=4)
- 
+
             self._show_name_input = dpg.add_input_text(
                 default_value=self._engine.show_name,
                 width=150,
@@ -155,20 +166,44 @@ class App:
                 on_enter=True,
                 callback=self._on_show_name_changed,
             )
- 
+
             dpg.add_button(label="Nouveau", callback=self._on_new_show)
             dpg.add_button(label="Ouvrir", callback=self._on_open_show)
             dpg.add_button(label="Sauvegarder", callback=self._on_save_show)
             dpg.add_button(label="Sauv. sous", callback=self._on_save_as_show)
 
-            # --- Fenêtres ---
+        # --- Ligne 2 : Fenêtres + Workspace ---
+        with dpg.group(horizontal=True):
             dpg.add_text("Fenetres :", color=Colors.TEXT_SECONDARY)
             dpg.add_spacer(width=4)
 
             dpg.add_button(label="Circuits", callback=self._toggle_circuits_window)
             dpg.add_button(label="Faders", callback=self._toggle_faders_window)
-
             dpg.add_button(label="Sequenceur", callback=self._toggle_sequencer_window)
+
+            dpg.add_spacer(width=24)
+
+            dpg.add_text("Espace :", color=Colors.TEXT_SECONDARY)
+            dpg.add_spacer(width=4)
+
+            self._ws_profile_combo = dpg.add_combo(
+                items=self._get_profile_names(),
+                default_value=self._engine.config.last_workspace_profile,
+                width=150,
+                callback=self._on_profile_selected,
+            )
+
+            dpg.add_button(label="Charger", callback=self._on_load_profile)
+            dpg.add_button(label="Capturer", callback=self._on_capture_profile)
+
+            self._ws_profile_name_input = dpg.add_input_text(
+                width=120, hint="Nouveau profil", on_enter=True,
+                callback=self._on_capture_new_profile)
+            dpg.add_button(label="+", width=30,
+                           callback=self._on_capture_new_profile)
+            dpg.add_button(label="X", width=30,
+                           callback=self._on_delete_profile)
+
 
     def _build_statusbar(self) -> None:
         """Barre de statut inférieure."""
@@ -324,3 +359,108 @@ class App:
             self._circuits_view._rebuild_all_sections()
         if self._faders_view:
             self._faders_view._update_all_displays()
+
+    # --- Workspace Profiles ---
+
+    def _get_profile_names(self) -> list[str]:
+        """Retourne la liste des noms de profils."""
+        profiles = self._engine.config.workspace_profiles
+        names = list(profiles.keys())
+        if "Défaut" not in names:
+            names.insert(0, "Défaut")
+        return names
+
+    def _capture_current_layout(self) -> dict:
+        """Capture la disposition complète de toutes les fenêtres."""
+        profile = {}
+        if self._circuits_view:
+            profile["circuits"] = self._circuits_view.get_layout_state()
+        if self._faders_view:
+            profile["faders"] = self._faders_view.get_layout_state()
+        if self._sequencer_view:
+            profile["sequencer"] = self._sequencer_view.get_layout_state()
+        return profile
+
+    def _apply_profile(self, profile: dict) -> None:
+        """Applique un profil workspace. Masque les fenêtres absentes."""
+        # Circuits
+        if "circuits" in profile and self._circuits_view:
+            self._circuits_view.apply_layout_state(profile["circuits"])
+        elif self._circuits_view and dpg.does_item_exist(self._circuits_view._window_id):
+            dpg.configure_item(self._circuits_view._window_id, show=False)
+
+        # Faders
+        if "faders" in profile and self._faders_view:
+            self._faders_view.apply_layout_state(profile["faders"])
+        elif self._faders_view and dpg.does_item_exist(self._faders_view._window_id):
+            dpg.configure_item(self._faders_view._window_id, show=False)
+
+        # Séquenceur
+        if "sequencer" in profile and self._sequencer_view:
+            self._sequencer_view.apply_layout_state(profile["sequencer"])
+        elif self._sequencer_view and dpg.does_item_exist(self._sequencer_view._window_id):
+            dpg.configure_item(self._sequencer_view._window_id, show=False)
+
+    def _on_profile_selected(self, sender: int, value: str) -> None:
+        """Sélection d'un profil dans le combo (ne charge pas automatiquement)."""
+        pass
+
+    def _on_load_profile(self) -> None:
+        """Charge le profil sélectionné."""
+        name = dpg.get_value(self._ws_profile_combo)
+        if not name:
+            return
+        profiles = self._engine.config.workspace_profiles
+        profile = profiles.get(name)
+        if profile:
+            self._apply_profile(profile)
+            self._engine.config.last_workspace_profile = name
+            logger.info("Profil workspace chargé : %s", name)
+        else:
+            logger.warning("Profil '%s' introuvable", name)
+
+    def _on_capture_profile(self) -> None:
+        """Capture la disposition actuelle dans le profil sélectionné."""
+        name = dpg.get_value(self._ws_profile_combo)
+        if not name:
+            return
+        profile = self._capture_current_layout()
+        self._engine.config.workspace_profiles[name] = profile
+        self._engine.config.last_workspace_profile = name
+        self._engine.config.save()
+        self._update_profile_combo()
+        logger.info("Profil workspace capturé : %s", name)
+
+    def _on_capture_new_profile(self, sender=None, value=None) -> None:
+        """Crée un nouveau profil depuis la disposition actuelle."""
+        name = dpg.get_value(self._ws_profile_name_input)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        profile = self._capture_current_layout()
+        self._engine.config.workspace_profiles[name] = profile
+        self._engine.config.last_workspace_profile = name
+        self._engine.config.save()
+        self._update_profile_combo()
+        dpg.set_value(self._ws_profile_combo, name)
+        dpg.set_value(self._ws_profile_name_input, "")
+        logger.info("Nouveau profil workspace créé : %s", name)
+
+    def _on_delete_profile(self) -> None:
+        """Supprime le profil sélectionné."""
+        name = dpg.get_value(self._ws_profile_combo)
+        if not name or name == "Défaut":
+            return  # Ne pas supprimer le profil par défaut
+        profiles = self._engine.config.workspace_profiles
+        if name in profiles:
+            del profiles[name]
+            self._engine.config.save()
+            self._update_profile_combo()
+            dpg.set_value(self._ws_profile_combo, "Défaut")
+            logger.info("Profil workspace supprimé : %s", name)
+
+    def _update_profile_combo(self) -> None:
+        """Met à jour le combo des profils."""
+        if dpg.does_item_exist(self._ws_profile_combo):
+            dpg.configure_item(self._ws_profile_combo,
+                               items=self._get_profile_names())

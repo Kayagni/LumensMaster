@@ -39,6 +39,8 @@ class AppConfig:
     dmx: DMXConfig = field(default_factory=DMXConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     last_show_path: str = ""
+    last_workspace_profile: str = "Défaut"
+    workspace_profiles: dict = field(default_factory=dict)
 
     def save(self, path: Path | None = None) -> None:
         """Sauvegarde la configuration dans un fichier JSON."""
@@ -66,6 +68,9 @@ class AppConfig:
             config.dmx = DMXConfig(**data.get("dmx", {}))
             config.ui = UIConfig(**data.get("ui", {}))
             config.last_show_path = data.get("last_show_path", "")
+            config.last_workspace_profile = data.get("last_workspace_profile", "Défaut")
+            config.workspace_profiles = data.get("workspace_profiles", {})
+
             logger.info("Configuration chargée : %s", filepath)
         except Exception:
             logger.exception("Erreur de chargement de la configuration")

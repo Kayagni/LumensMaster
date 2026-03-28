@@ -9,5 +9,140 @@
     "height": 900,
     "fader_count": 64
   },
-  "last_show_path": "D:\\DevsMax\\Tests\\LumensMaster\\ShowTest1.lms"
+  "last_show_path": "D:\\DevsMax\\Tests\\LumensMaster\\ShowTest1.lms",
+  "last_workspace_profile": "Vue initiale",
+  "workspace_profiles": {
+    "Défaut": {
+      "circuits": {
+        "visible": true,
+        "columns": 8,
+        "max_circuits": 128,
+        "cell_width": 52,
+        "cell_height": 46,
+        "categories": {
+          "valeurs": false,
+          "layout": false,
+          "groupes": false
+        },
+        "pos_x": 4,
+        "pos_y": 101,
+        "width": 513,
+        "height": 679
+      },
+      "faders": {
+        "visible": true,
+        "columns": 8,
+        "fader_count": 16,
+        "fader_width": 55,
+        "slider_height": 164,
+        "categories": {
+          "valeurs": true,
+          "layout": false
+        },
+        "pos_x": 525,
+        "pos_y": 102,
+        "width": 530,
+        "height": 678
+      },
+      "sequencer": {
+        "visible": true,
+        "categories": {
+          "transport": false,
+          "cues": true
+        },
+        "pos_x": 1062,
+        "pos_y": 101,
+        "width": 467,
+        "height": 681
+      }
+    },
+    "Vue initiale": {
+      "circuits": {
+        "visible": true,
+        "columns": 8,
+        "max_circuits": 128,
+        "cell_width": 52,
+        "cell_height": 46,
+        "categories": {
+          "valeurs": true,
+          "layout": false,
+          "groupes": false
+        },
+        "pos_x": 4,
+        "pos_y": 101,
+        "width": 513,
+        "height": 679
+      },
+      "faders": {
+        "visible": true,
+        "columns": 8,
+        "fader_count": 16,
+        "fader_width": 55,
+        "slider_height": 164,
+        "categories": {
+          "valeurs": true,
+          "layout": false
+        },
+        "pos_x": 525,
+        "pos_y": 102,
+        "width": 719,
+        "height": 678
+      },
+      "sequencer": {
+        "visible": false,
+        "categories": {
+          "transport": false,
+          "cues": true
+        },
+        "pos_x": 1062,
+        "pos_y": 101,
+        "width": 467,
+        "height": 681
+      }
+    },
+    "Vue création conduite": {
+      "circuits": {
+        "visible": false,
+        "columns": 8,
+        "max_circuits": 128,
+        "cell_width": 52,
+        "cell_height": 46,
+        "categories": {
+          "valeurs": false,
+          "layout": false,
+          "groupes": false
+        },
+        "pos_x": 4,
+        "pos_y": 101,
+        "width": 513,
+        "height": 679
+      },
+      "faders": {
+        "visible": true,
+        "columns": 8,
+        "fader_count": 16,
+        "fader_width": 55,
+        "slider_height": 164,
+        "categories": {
+          "valeurs": true,
+          "layout": false
+        },
+        "pos_x": 0,
+        "pos_y": 100,
+        "width": 701,
+        "height": 678
+      },
+      "sequencer": {
+        "visible": true,
+        "categories": {
+          "transport": false,
+          "cues": true
+        },
+        "pos_x": 709,
+        "pos_y": 99,
+        "width": 766,
+        "height": 677
+      }
+    }
+  }
 }

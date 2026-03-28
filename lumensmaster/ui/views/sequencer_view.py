@@ -628,5 +628,46 @@ class SequencerView:
                 dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.TEXT_SECONDARY)
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
+    def get_layout_state(self) -> dict:
+        """Capture l'état complet du layout pour un profil workspace."""
+        state = {
+            "visible": (dpg.does_item_exist(self._window_id)
+                        and dpg.is_item_shown(self._window_id)),
+            "categories": dict(self._category_visible),
+        }
+        if dpg.does_item_exist(self._window_id):
+            pos = dpg.get_item_pos(self._window_id)
+            state["pos_x"] = pos[0]
+            state["pos_y"] = pos[1]
+            state["width"] = dpg.get_item_width(self._window_id)
+            state["height"] = dpg.get_item_height(self._window_id)
+        return state
+
+    def apply_layout_state(self, state: dict) -> None:
+        """Restaure le layout depuis un profil workspace."""
+        for cat_key, visible in state.get("categories", {}).items():
+            if cat_key in self._category_visible:
+                self._category_visible[cat_key] = visible
+                group_id = self._category_groups.get(cat_key)
+                if group_id and dpg.does_item_exist(group_id):
+                    dpg.configure_item(group_id, show=visible)
+                btn_id = self._category_buttons.get(cat_key)
+                if btn_id and dpg.does_item_exist(btn_id):
+                    dpg.bind_item_theme(btn_id,
+                        self._theme_toggle_on if visible else self._theme_toggle_off)
+
+        if dpg.does_item_exist(self._window_id):
+            if "pos_x" in state and "pos_y" in state:
+                dpg.set_item_pos(self._window_id,
+                                 [state["pos_x"], state["pos_y"]])
+            if "width" in state:
+                dpg.configure_item(self._window_id, width=state["width"])
+            if "height" in state:
+                dpg.configure_item(self._window_id, height=state["height"])
+
+        visible = state.get("visible", True)
+        dpg.configure_item(self._window_id, show=visible)
+
+
     def _on_close(self) -> None:
         logger.debug("Fenetre Sequenceur fermee")
