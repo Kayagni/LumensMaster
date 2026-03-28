@@ -208,9 +208,9 @@ class SequencerView:
 
             # Slider manuel
             dpg.add_text("Manuel :", color=Colors.TEXT_SECONDARY)
-            self._crossfade_slider = dpg.add_slider_float(
-                default_value=0.0, min_value=0.0, max_value=1.0,
-                width=200, format="%.0f%%",
+            self._crossfade_slider = dpg.add_slider_int(
+                default_value=0, min_value=0, max_value=100,
+                width=200, format="%d%%",
                 callback=self._on_manual_slider,
             )
 
@@ -437,14 +437,23 @@ class SequencerView:
     def _on_pause(self) -> None:
         self._engine.sequencer.pause()
 
-    def _on_manual_slider(self, sender: int, value: float) -> None:
-        """Slider de crossfade manuel."""
+    def _on_manual_slider(self, sender: int, value: int) -> None:
+        """Slider de crossfade manuel (0-100)."""
         seq = self._engine.sequencer
-        if seq.mode == CrossfadeMode.IDLE:
-            # Activer le mode manuel
+        progress = value / 100.0
+ 
+        if value > 0 and seq.mode == CrossfadeMode.IDLE:
+            # Activer le mode manuel quand on commence à bouger
             seq.set_manual_mode(True)
+ 
         if seq.mode == CrossfadeMode.MANUAL:
-            seq.set_manual_progress(value)
+            seq.set_manual_progress(progress)
+ 
+            # Compléter le crossfade à 100%
+            if value >= 100:
+                seq.complete_manual()
+                # Remettre le slider à 0 pour le prochain crossfade
+                dpg.set_value(sender, 0)
 
     def _on_cue_click(self, sender: int, value: Any, user_data: float) -> None:
         """Clic sur un numéro de cue → GO TO."""

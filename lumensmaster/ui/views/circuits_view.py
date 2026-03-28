@@ -1,13 +1,12 @@
 """
 Vue Circuits : grille interactive des circuits DMX avec groupes.
 
-Code couleur des circuits actifs :
-    - Bleu    : valeur provenant de la vue circuits (directe)
-    - Rouge   : valeur provenant d'un ou plusieurs faders
-    - Violet  : valeur provenant des deux sources (HTP)
+Indicateurs de source en bas de chaque cellule :
+    - C (bleu)   : valeur provenant de la vue circuits (directe)
+    - F (rouge)  : valeur provenant d'un ou plusieurs faders
+    - S (jaune)  : valeur provenant du séquenceur
 
-Tooltip sur les circuits :
-    - Affiche les faders qui pilotent le circuit (au survol)
+Tooltip : détail des sources et faders contributeurs.
 """
 
 from __future__ import annotations
@@ -29,10 +28,16 @@ ALL_CIRCUITS_SECTION = "__ALL__"
 DEFAULT_COLUMNS = 24
 DEFAULT_MAX_CIRCUITS = 512
 DEFAULT_CELL_WIDTH = 52
-DEFAULT_CELL_HEIGHT = 38
+DEFAULT_CELL_HEIGHT = 46  # Un peu plus haut pour les indicateurs
 MIN_CELL_SIZE = 28
 MAX_CELL_SIZE = 100
 CELL_SPACING = 2
+
+# Couleurs des indicateurs de source
+COLOR_SRC_CIRCUIT = (80, 140, 255)      # Bleu
+COLOR_SRC_FADER = (255, 80, 80)         # Rouge
+COLOR_SRC_SEQUENCER = (255, 200, 40)    # Jaune
+COLOR_SRC_OFF = (50, 50, 60)            # Gris très sombre (inactif)
 
 
 class CircuitsView:
@@ -75,15 +80,11 @@ class CircuitsView:
         self._group_combo_remove: int = 0
         self._group_combo_delete: int = 0
 
-        # Thèmes : normal, sélectionné, et par source (circuit/fader/both)
+        # Thèmes simplifiés (plus de couleur par source sur le bouton)
         self._theme_normal: int = 0
         self._theme_selected: int = 0
-        self._theme_active_circuit: int = 0
-        self._theme_active_fader: int = 0
-        self._theme_active_both: int = 0
-        self._theme_sel_active_circuit: int = 0
-        self._theme_sel_active_fader: int = 0
-        self._theme_sel_active_both: int = 0
+        self._theme_active: int = 0
+        self._theme_selected_active: int = 0
         self._theme_toggle_on: int = 0
         self._theme_toggle_off: int = 0
 
@@ -92,6 +93,8 @@ class CircuitsView:
         self._engine.bus.on("circuit.changed", self._on_circuit_changed)
         self._engine.bus.on("groups.changed", self._on_groups_changed)
         self._engine.bus.on("fader.changed", self._on_fader_changed)
+        self._engine.bus.on("sequencer.output_changed", self._on_sequencer_changed)
+        self._engine.bus.on("sequencer.state_changed", self._on_sequencer_changed)
 
     def build(self) -> int:
         self._create_themes()
@@ -360,107 +363,116 @@ class CircuitsView:
         dpg.add_separator()
         dpg.add_spacer(height=4)
 
+    # --- Cellules ---
+
     def _build_cell(self, circuit: int, section_key: str) -> None:
-        level = self._engine.circuits.get_level(circuit)
-        source = self._engine.get_circuit_source(circuit)
+        """Construit une cellule : bouton + indicateurs de source."""
+        effective = self._engine.get_effective_level(circuit)
         selected = self._engine.circuits.is_selected(circuit)
-        value_str = self._engine.circuits.format_value(level) if level > 0 else ""
-
-        # Valeur effective affichée (max entre direct et fader, via HTP)
-        effective = level
+        sources = self._engine.get_circuit_source(circuit)
         fader_ids = self._engine.get_contributing_faders(circuit)
-        if fader_ids:
-            fader_max = 0
-            for fid in fader_ids:
-                fader = self._engine.faders.get_fader(fid)
-                if fader:
-                    fader_max = max(fader_max, fader.get_output(circuit))
-            effective = max(level, fader_max)
+        has_value = effective > 0
 
-        if effective > 0 and source:
+        if has_value:
             eff_str = self._engine.circuits.format_value(effective)
             display = f"{circuit}\n{eff_str}"
         else:
             display = f"{circuit}\n---"
 
-        button = dpg.add_button(
-            label=display,
-            width=self._cell_width,
-            height=self._cell_height,
-            callback=self._on_cell_click,
-            user_data=circuit,
-        )
+        cell = {}
 
-        theme = self._get_cell_theme(selected, source)
-        dpg.bind_item_theme(button, theme)
+        with dpg.group() as cell_group:
+            # Bouton principal
+            cell["button"] = dpg.add_button(
+                label=display,
+                width=self._cell_width,
+                height=self._cell_height - 12,  # Laisser place aux indicateurs
+                callback=self._on_cell_click,
+                user_data=circuit,
+            )
+            theme = self._get_cell_theme(selected, has_value)
+            dpg.bind_item_theme(cell["button"], theme)
 
-        # Tooltip avec info source
-        with dpg.tooltip(button):
-            tooltip_text = dpg.add_text(self._build_tooltip_text(circuit, source, fader_ids))
+            # Indicateurs de source (petits textes colorés)
+            with dpg.group(horizontal=True):
+                cell["src_circuit"] = dpg.add_text(
+                    "C", color=COLOR_SRC_CIRCUIT if sources["circuit"] else COLOR_SRC_OFF)
+                cell["src_fader"] = dpg.add_text(
+                    "F", color=COLOR_SRC_FADER if sources["fader"] else COLOR_SRC_OFF)
+                cell["src_seq"] = dpg.add_text(
+                    "S", color=COLOR_SRC_SEQUENCER if sources["sequencer"] else COLOR_SRC_OFF)
+
+        # Tooltip
+        with dpg.tooltip(cell_group):
+            cell["tooltip_text"] = dpg.add_text(
+                self._build_tooltip_text(circuit, sources, fader_ids))
 
         if section_key not in self._cells:
             self._cells[section_key] = {}
-        self._cells[section_key][circuit] = {
-            "button": button,
-            "tooltip_text": tooltip_text,
-        }
+        self._cells[section_key][circuit] = cell
 
-    def _build_tooltip_text(self, circuit: int, source: str | None,
+    def _build_tooltip_text(self, circuit: int, sources: dict[str, bool],
                             fader_ids: list[int]) -> str:
-        """Construit le texte du tooltip pour un circuit."""
         parts = [f"Circuit {circuit}"]
-        if source == "circuit":
-            parts.append("Source : directe")
-        elif source == "fader":
+
+        active_sources = []
+        if sources["circuit"]:
+            level = self._engine.circuits.get_level(circuit)
+            active_sources.append(f"Direct : {level}")
+        if sources["fader"]:
             faders_str = ", ".join(f"F{fid}" for fid in fader_ids)
-            parts.append(f"Source : faders ({faders_str})")
-        elif source == "both":
-            faders_str = ", ".join(f"F{fid}" for fid in fader_ids)
-            parts.append(f"Sources : directe + faders ({faders_str})")
+            active_sources.append(f"Faders : {faders_str}")
+        if sources["sequencer"]:
+            active_sources.append("Sequenceur")
+
+        if active_sources:
+            parts.extend(active_sources)
+            parts.append(f"Effectif : {self._engine.get_effective_level(circuit)}")
         else:
             parts.append("Inactif")
+
         return "\n".join(parts)
 
     # --- Thèmes ---
 
     def _create_themes(self) -> None:
-        def _btn_theme(bg, bg_hover, bg_active, text):
-            with dpg.theme() as t:
-                with dpg.theme_component(dpg.mvButton):
-                    dpg.add_theme_color(dpg.mvThemeCol_Button, bg)
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, bg_hover)
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, bg_active)
-                    dpg.add_theme_color(dpg.mvThemeCol_Text, text)
-                    dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
-            return t
-
         # Normal (inactif, non sélectionné)
-        self._theme_normal = _btn_theme(
-            Colors.BG_WIDGET, Colors.BG_LIGHT, Colors.BG_LIGHT, Colors.TEXT_SECONDARY)
+        with dpg.theme() as self._theme_normal:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.BG_WIDGET)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, Colors.BG_LIGHT)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, Colors.BG_LIGHT)
+                dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.TEXT_SECONDARY)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
-        # Sélectionné, inactif
-        self._theme_selected = _btn_theme(
-            (40, 60, 100), (50, 70, 120), (50, 70, 120), Colors.ACCENT)
+        # Sélectionné
+        with dpg.theme() as self._theme_selected:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 60, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 120))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (50, 70, 120))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.ACCENT)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
-        # Bleu — source circuit (directe)
-        self._theme_active_circuit = _btn_theme(
-            (30, 40, 70), (40, 55, 90), (40, 55, 90), (80, 140, 255))
-        self._theme_sel_active_circuit = _btn_theme(
-            (40, 60, 110), (50, 75, 130), (50, 75, 130), (120, 180, 255))
+        # Actif (valeur > 0)
+        with dpg.theme() as self._theme_active:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (30, 45, 55))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (40, 55, 65))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 55, 65))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, Colors.TEXT_PRIMARY)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
-        # Rouge — source fader
-        self._theme_active_fader = _btn_theme(
-            (70, 30, 30), (90, 40, 40), (90, 40, 40), (255, 100, 100))
-        self._theme_sel_active_fader = _btn_theme(
-            (90, 40, 50), (110, 50, 60), (110, 50, 60), (255, 140, 140))
+        # Sélectionné + actif
+        with dpg.theme() as self._theme_selected_active:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 65, 90))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 80, 110))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (50, 80, 110))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (140, 220, 255))
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
 
-        # Violet — sources combinées (circuit + fader)
-        self._theme_active_both = _btn_theme(
-            (55, 30, 70), (70, 40, 90), (70, 40, 90), (200, 120, 255))
-        self._theme_sel_active_both = _btn_theme(
-            (70, 40, 95), (85, 50, 110), (85, 50, 110), (220, 160, 255))
-
-        # Toggle ON/OFF pour catégories
+        # Toggle ON/OFF
         with dpg.theme() as self._theme_toggle_on:
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.ACCENT_ACTIVE)
@@ -475,50 +487,55 @@ class CircuitsView:
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, Colors.BG_WIDGET)
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
 
-    def _get_cell_theme(self, selected: bool, source: str | None) -> int:
-        """Retourne le thème basé sur la sélection et la source de la valeur."""
-        if source == "circuit":
-            return self._theme_sel_active_circuit if selected else self._theme_active_circuit
-        elif source == "fader":
-            return self._theme_sel_active_fader if selected else self._theme_active_fader
-        elif source == "both":
-            return self._theme_sel_active_both if selected else self._theme_active_both
+    def _get_cell_theme(self, selected: bool, active: bool) -> int:
+        if selected and active:
+            return self._theme_selected_active
         elif selected:
             return self._theme_selected
+        elif active:
+            return self._theme_active
         return self._theme_normal
 
     # --- Mise à jour ---
 
     def _update_cell(self, circuit: int) -> None:
-        source = self._engine.get_circuit_source(circuit)
+        effective = self._engine.get_effective_level(circuit)
         selected = self._engine.circuits.is_selected(circuit)
+        sources = self._engine.get_circuit_source(circuit)
         fader_ids = self._engine.get_contributing_faders(circuit)
+        has_value = effective > 0
 
-        # Valeur effective (HTP entre direct et faders)
-        direct_level = self._engine.circuits.get_level(circuit)
-        fader_max = 0
-        for fid in fader_ids:
-            fader = self._engine.faders.get_fader(fid)
-            if fader:
-                fader_max = max(fader_max, fader.get_output(circuit))
-        effective = max(direct_level, fader_max)
-
-        if effective > 0 and source:
+        if has_value:
             eff_str = self._engine.circuits.format_value(effective)
             display = f"{circuit}\n{eff_str}"
         else:
             display = f"{circuit}\n---"
 
-        theme = self._get_cell_theme(selected, source)
-        tooltip_str = self._build_tooltip_text(circuit, source, fader_ids)
+        theme = self._get_cell_theme(selected, has_value)
+        tooltip_str = self._build_tooltip_text(circuit, sources, fader_ids)
 
         for section_store in self._cells.values():
             cell = section_store.get(circuit)
             if not cell:
                 continue
-            if dpg.does_item_exist(cell["button"]):
+
+            # Bouton
+            if dpg.does_item_exist(cell.get("button", 0)):
                 dpg.set_item_label(cell["button"], display)
                 dpg.bind_item_theme(cell["button"], theme)
+
+            # Indicateurs de source
+            if dpg.does_item_exist(cell.get("src_circuit", 0)):
+                dpg.configure_item(cell["src_circuit"],
+                                   color=COLOR_SRC_CIRCUIT if sources["circuit"] else COLOR_SRC_OFF)
+            if dpg.does_item_exist(cell.get("src_fader", 0)):
+                dpg.configure_item(cell["src_fader"],
+                                   color=COLOR_SRC_FADER if sources["fader"] else COLOR_SRC_OFF)
+            if dpg.does_item_exist(cell.get("src_seq", 0)):
+                dpg.configure_item(cell["src_seq"],
+                                   color=COLOR_SRC_SEQUENCER if sources["sequencer"] else COLOR_SRC_OFF)
+
+            # Tooltip
             if dpg.does_item_exist(cell.get("tooltip_text", 0)):
                 dpg.set_value(cell["tooltip_text"], tooltip_str)
 
@@ -539,11 +556,14 @@ class CircuitsView:
             self._update_cell(circuit)
 
     def _on_fader_changed(self, fader_id: int = 0, level: int = 0, **kwargs) -> None:
-        """Quand un fader bouge, mettre à jour les circuits qu'il pilote."""
         fader = self._engine.faders.get_fader(fader_id)
         if fader:
             for circuit in fader.contents:
                 self._update_cell(circuit)
+
+    def _on_sequencer_changed(self, **kwargs) -> None:
+        """Appelé quand la sortie du séquenceur change."""
+        self._update_all_cells()
 
     def _on_groups_changed(self, **kwargs) -> None:
         self._sync_section_order()
@@ -726,7 +746,6 @@ class CircuitsView:
         self._engine.faders.set_contents(fader_id, snapshot)
         self._engine.faders.set_label(fader_id, f"Rec.{fader_id}")
         logger.info("Enregistre %d circuits sur fader %d", len(snapshot), fader_id)
-        # Rafraîchir les cellules pour refléter le nouveau code couleur
         self._update_all_cells()
 
     def _clear_selected(self) -> None:

@@ -197,33 +197,65 @@ class Engine:
             self.dmx_output.start()
             return False
         
-    def get_circuit_source(self, circuit: int) -> str | None:
+    def get_circuit_source(self, circuit: int) -> dict[str, bool]:
         """
-        Détermine la source de la valeur d'un circuit.
+        Détermine les sources actives pour un circuit.
  
         Returns:
-            "circuit" : valeur définie directement via la vue circuits
-            "fader"   : valeur provenant d'un ou plusieurs faders
-            "both"    : valeur provenant des deux sources
-            None      : circuit inactif (valeur 0)
+            Dict avec les clés "circuit", "fader", "sequencer" (True/False)
         """
-        direct = self.circuits.get_level(circuit)
+        sources = {
+            "circuit": False,
+            "fader": False,
+            "sequencer": False,
+        }
  
-        fader_level = 0
+        # Source directe (circuits)
+        if self.circuits.get_level(circuit) > 0:
+            sources["circuit"] = True
+ 
+        # Source faders
+        for fid in range(1, self.faders.count + 1):
+            fader = self.faders.get_fader(fid)
+            if fader and fader.level > 0 and circuit in fader.contents:
+                if fader.get_output(circuit) > 0:
+                    sources["fader"] = True
+                    break
+ 
+        # Source séquenceur
+        seq_output = self.sequencer.get_output()
+        if seq_output.get(circuit, 0) > 0:
+            sources["sequencer"] = True
+ 
+        return sources
+ 
+    def get_effective_level(self, circuit: int) -> int:
+        """
+        Retourne le niveau effectif d'un circuit (HTP de toutes les sources).
+        """
+        level = 0
+ 
+        # Direct
+        direct = self.circuits.get_level(circuit)
+        if direct > level:
+            level = direct
+ 
+        # Faders
         for fid in range(1, self.faders.count + 1):
             fader = self.faders.get_fader(fid)
             if fader and fader.level > 0 and circuit in fader.contents:
                 output = fader.get_output(circuit)
-                if output > fader_level:
-                    fader_level = output
+                if output > level:
+                    level = output
  
-        if direct > 0 and fader_level > 0:
-            return "both"
-        elif direct > 0:
-            return "circuit"
-        elif fader_level > 0:
-            return "fader"
-        return None
+        # Séquenceur
+        seq_output = self.sequencer.get_output()
+        seq_level = seq_output.get(circuit, 0)
+        if seq_level > level:
+            level = seq_level
+ 
+        return level
+ 
  
     def get_contributing_faders(self, circuit: int) -> list[int]:
         """
