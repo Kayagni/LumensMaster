@@ -66,11 +66,11 @@
         "categories": {
           "valeurs": false,
           "layout": false,
-          "groupes": true
+          "groupes": false
         },
         "pos_x": 4,
         "pos_y": 101,
-        "width": 521,
+        "width": 513,
         "height": 679
       },
       "faders": {
@@ -81,18 +81,18 @@
         "slider_height": 164,
         "categories": {
           "valeurs": true,
-          "layout": true
+          "layout": false
         },
         "pos_x": 525,
         "pos_y": 102,
-        "width": 528,
+        "width": 530,
         "height": 678
       },
       "sequencer": {
         "visible": true,
         "categories": {
           "transport": false,
-          "cues": false
+          "cues": true
         },
         "pos_x": 1062,
         "pos_y": 101,

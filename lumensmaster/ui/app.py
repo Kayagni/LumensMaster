@@ -18,6 +18,7 @@ from lumensmaster.ui.icons import get_icon_manager
 from lumensmaster.ui.views.circuits_view import CircuitsView
 from lumensmaster.ui.views.faders_view import FadersView
 from lumensmaster.ui.views.sequencer_view import SequencerView
+from lumensmaster.ui.views.trichromie_view import TrichromieView
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class App:
         self._faders_view: FadersView | None = None
         self._port_combo: int = 0
         self._sequencer_view: SequencerView | None = None
+        self._trichromie_view: TrichromieView | None = None
         self._file_dialog_save: int = 0
         self._file_dialog_open: int = 0
         self._show_name_input: int = 0
@@ -103,6 +105,9 @@ class App:
 
         self._sequencer_view = SequencerView(self._engine)
         self._sequencer_view.build()
+
+        self._trichromie_view = TrichromieView(self._engine)
+        self._trichromie_view.build()
 
         # File dialogs (créés au niveau racine, pas dans une fenêtre)
         with dpg.file_dialog(
@@ -180,6 +185,7 @@ class App:
             dpg.add_button(label="Circuits", callback=self._toggle_circuits_window)
             dpg.add_button(label="Faders", callback=self._toggle_faders_window)
             dpg.add_button(label="Sequenceur", callback=self._toggle_sequencer_window)
+            dpg.add_button(label="Trichromie", callback=self._toggle_trichromie_window)
 
             dpg.add_spacer(width=24)
 
@@ -338,6 +344,11 @@ class App:
         else:
             self._sequencer_view = SequencerView(self._engine)
             self._sequencer_view.build()
+
+    def _toggle_trichromie_window(self) -> None:
+        """Affiche ou masque la fenêtre Trichromie."""
+        if self._trichromie_view:
+            self._trichromie_view.toggle()
 
     # --- Mise à jour statut ---
 

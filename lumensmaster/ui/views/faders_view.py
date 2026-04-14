@@ -188,6 +188,7 @@ class FadersView:
             dpg.add_radio_button(items=["DMX", "%"], default_value="DMX",
                                  horizontal=True, callback=self._on_display_mode_changed)
             dpg.add_spacer(width=12)
+        with dpg.group(horizontal=True):
             dpg.add_button(label="Clear sel.", callback=self._clear_selected)
             dpg.add_button(label="Clear tout", callback=self._clear_all)
 

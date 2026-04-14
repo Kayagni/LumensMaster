@@ -27,6 +27,7 @@ from lumensmaster.modules.grand_master import GrandMaster
 from lumensmaster.modules.patch import Patch
 from lumensmaster.modules.circuits import Circuits
 from lumensmaster.modules.sequencer import Sequencer
+from lumensmaster.modules.trichromie import ColorManager
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ class Engine:
         self.sequencer = Sequencer(self.bus)
         # Le séquenceur appelle update_dmx directement (pas via le bus)
         self.sequencer.set_dmx_callback(self.update_dmx)
+        self.color_manager = ColorManager(self.bus)
+        self.color_manager.set_circuit_callback(self._set_circuit_for_color)
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -277,7 +280,9 @@ class Engine:
                     result.append(fid)
         return result
     
-    
+    def _set_circuit_for_color(self, circuit: int, value: int) -> None:
+        """Callback utilisé par le ColorManager pour écrire dans les circuits."""
+        self.circuits.set_level(circuit, value)
 
     @staticmethod
     def list_dmx_devices() -> list[dict[str, str]]:
@@ -299,6 +304,7 @@ class Engine:
         self.grand_master.full()
         self.update_dmx()
         self.sequencer.from_dict({})
+        self.color_manager.from_dict({})
         self.sequencer.ensure_default_cue()
 
         self.bus.emit("show.loaded")
@@ -322,6 +328,7 @@ class Engine:
         self._show_data["circuits"] = self.circuits.to_dict()
         self._show_data["grandmaster"] = self.grand_master.level
         self._show_data["sequencer"] = self.sequencer.to_dict()
+        self._show_data["trichromie"] = self.color_manager.to_dict()
 
         if save_show(self._show_data, save_path):
             self._show_path = save_path
@@ -352,6 +359,7 @@ class Engine:
         self.circuits.from_dict(data.get("circuits", {}))
         self.grand_master.level = data.get("grandmaster", 255)
         self.sequencer.from_dict(data.get("sequencer", {}))
+        self.color_manager.from_dict(data.get("trichromie", {}))
 
         self.update_dmx()
         self.config.last_show_path = path
