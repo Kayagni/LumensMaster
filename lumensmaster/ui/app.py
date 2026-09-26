@@ -15,6 +15,7 @@ from lumensmaster import __app_name__, __version__
 from lumensmaster.core.engine import Engine
 from lumensmaster.ui.theme import Colors, apply_theme
 from lumensmaster.ui.icons import get_icon_manager
+from lumensmaster.ui.views.bangers_view import BangersView
 from lumensmaster.ui.views.circuits_view import CircuitsView
 from lumensmaster.ui.views.faders_view import FadersView
 from lumensmaster.ui.views.sequencer_view import SequencerView
@@ -33,6 +34,7 @@ class App:
         self._port_combo: int = 0
         self._sequencer_view: SequencerView | None = None
         self._trichromie_view: TrichromieView | None = None
+        self._bangers_view: BangersView | None = None
         self._file_dialog_save: int = 0
         self._file_dialog_open: int = 0
         self._show_name_input: int = 0
@@ -74,6 +76,8 @@ class App:
             # depuis le thread principal (Dear PyGui n'est pas thread-safe)
             while dpg.is_dearpygui_running():
                 self._engine.sequencer.poll_ui()
+                # Bangers : ordonnanceur sur le thread principal (~1 frame)
+                self._engine.bangers.poll()
                 dpg.render_dearpygui_frame()
         finally:
             # Sauvegarder la disposition courante dans le dernier profil utilisé
@@ -108,6 +112,9 @@ class App:
 
         self._trichromie_view = TrichromieView(self._engine)
         self._trichromie_view.build()
+
+        self._bangers_view = BangersView(self._engine)
+        self._bangers_view.build()
 
         # File dialogs (créés au niveau racine, pas dans une fenêtre)
         with dpg.file_dialog(
@@ -186,6 +193,7 @@ class App:
             dpg.add_button(label="Faders", callback=self._toggle_faders_window)
             dpg.add_button(label="Sequenceur", callback=self._toggle_sequencer_window)
             dpg.add_button(label="Trichromie", callback=self._toggle_trichromie_window)
+            dpg.add_button(label="Bangers", callback=self._toggle_bangers_window)
 
             dpg.add_spacer(width=24)
 
@@ -350,6 +358,11 @@ class App:
         if self._trichromie_view:
             self._trichromie_view.toggle()
 
+    def _toggle_bangers_window(self) -> None:
+        """Affiche ou masque la fenêtre Bangers."""
+        if self._bangers_view:
+            self._bangers_view.toggle()
+
     # --- Mise à jour statut ---
 
     def _update_status_dmx(self, text: str, color: tuple = Colors.TEXT_SECONDARY) -> None:
@@ -390,6 +403,8 @@ class App:
             profile["faders"] = self._faders_view.get_layout_state()
         if self._sequencer_view:
             profile["sequencer"] = self._sequencer_view.get_layout_state()
+        if self._bangers_view:
+            profile["bangers"] = self._bangers_view.get_layout_state()
         return profile
 
     def _apply_profile(self, profile: dict) -> None:
@@ -411,6 +426,12 @@ class App:
             self._sequencer_view.apply_layout_state(profile["sequencer"])
         elif self._sequencer_view and dpg.does_item_exist(self._sequencer_view._window_id):
             dpg.configure_item(self._sequencer_view._window_id, show=False)
+
+        # Bangers
+        if "bangers" in profile and self._bangers_view:
+            self._bangers_view.apply_layout_state(profile["bangers"])
+        elif self._bangers_view and dpg.does_item_exist(self._bangers_view._window_id):
+            dpg.configure_item(self._bangers_view._window_id, show=False)
 
     def _on_profile_selected(self, sender: int, value: str) -> None:
         """Sélection d'un profil dans le combo (ne charge pas automatiquement)."""

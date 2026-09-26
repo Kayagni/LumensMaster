@@ -47,6 +47,7 @@ class Cue:
     delay_in: float = 0.0
     delay_out: float = 0.0
     link_time: float = 0.0
+    banger: int = 0  # numéro du banger déclenché au GO (0 = aucun)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +59,7 @@ class Cue:
             "delay_in": self.delay_in,
             "delay_out": self.delay_out,
             "link_time": self.link_time,
+            "banger": self.banger,
         }
 
     @classmethod
@@ -77,6 +79,7 @@ class Cue:
             delay_in=float(data.get("delay_in", 0.0)),
             delay_out=float(data.get("delay_out", 0.0)),
             link_time=float(data.get("link_time", 0.0)),
+            banger=int(data.get("banger", 0) or 0),
         )
 
 
@@ -124,6 +127,38 @@ class Sequencer:
         self._ui_progress_dirty: bool = False
         self._ui_last_progress: float = 0.0
         self._ui_link_pending: bool = False
+
+        # Links globaux (WhiteCat : index_link_is_on). Si False, les
+        # link_time des cues sont ignorés.
+        self._links_enabled: bool = True
+
+    @property
+    def links_enabled(self) -> bool:
+        return self._links_enabled
+
+    @links_enabled.setter
+    def links_enabled(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._links_enabled:
+            self._links_enabled = value
+            logger.info("Links %s", "activés" if value else "désactivés")
+            self._bus.emit("sequencer.state_changed")
+
+    def _emit_go_started(self, from_index: int, to_index: int,
+                         direction: str) -> None:
+        """
+        Signale le départ d'un GO (thread UI uniquement).
+        Utilisé par les bangers : direction "forward" → lancer le banger de
+        la cue cible ; "back" → rollback du banger de la cue quittée.
+        """
+        def number(idx: int) -> float | None:
+            if 0 <= idx < len(self._cues):
+                return self._cues[idx].number
+            return None
+        self._bus.emit("sequencer.go_started",
+                       cue_number=number(to_index),
+                       from_cue=number(from_index),
+                       direction=direction)
 
     def ensure_default_cue(self) -> None:
         """Crée la cue 'Noir début' si la séquence est vide."""
@@ -285,6 +320,7 @@ class Sequencer:
         with self._lock:
             if self.is_crossfading:
                 self._complete_crossfade_locked()
+            from_index = self._current_index
             next_index = self._current_index + 1
             if next_index >= len(self._cues):
                 next_index = 0  # Boucle vers le début
@@ -294,6 +330,7 @@ class Sequencer:
         self._bus.emit("sequencer.state_changed")
         self._bus.emit("sequencer.output_changed")
         self._notify_dmx()
+        self._emit_go_started(from_index, next_index, "forward")
 
     def go_back(self) -> None:
         if not self._cues:
@@ -301,6 +338,7 @@ class Sequencer:
         with self._lock:
             if self.is_crossfading:
                 self._complete_crossfade_locked()
+            from_index = self._current_index
             prev_index = self._current_index - 1
             if prev_index < 0:
                 logger.info("Début de séquence")
@@ -310,6 +348,7 @@ class Sequencer:
         self._bus.emit("sequencer.state_changed")
         self._bus.emit("sequencer.output_changed")
         self._notify_dmx()
+        self._emit_go_started(from_index, prev_index, "back")
 
     def go_to_cue(self, cue_number: float) -> None:
         for i, cue in enumerate(self._cues):
@@ -317,10 +356,12 @@ class Sequencer:
                 with self._lock:
                     if self.is_crossfading:
                         self._complete_crossfade_locked()
+                    from_index = self._current_index
                     self._start_crossfade_locked(i)
                 self._bus.emit("sequencer.state_changed")
                 self._bus.emit("sequencer.output_changed")
                 self._notify_dmx()
+                self._emit_go_started(from_index, i, "forward")
                 return
             
     def goto_cue_instant(self, cue_number: float) -> None:
@@ -365,11 +406,13 @@ class Sequencer:
     # --- Crossfade manuel ---
 
     def set_manual_mode(self, enabled: bool) -> None:
+        started: tuple[int, int] | None = None
         with self._lock:
             if enabled and self._mode == CrossfadeMode.IDLE:
                 next_index = self._current_index + 1
                 if next_index >= len(self._cues):
                     return
+                started = (self._current_index, next_index)
                 self._target_index = next_index
                 target_cue = self._cues[next_index]
                 self._target_levels = dict(target_cue.contents)
@@ -387,6 +430,8 @@ class Sequencer:
         self._bus.emit("sequencer.state_changed")
         self._bus.emit("sequencer.output_changed")
         self._notify_dmx()
+        if started is not None:
+            self._emit_go_started(started[0], started[1], "forward")
 
     def set_manual_progress(self, progress: float) -> None:
         """En mode manuel, les temps de fade/delay sont ignorés."""
@@ -493,7 +538,8 @@ class Sequencer:
                     completed = True
                     # Vérifier le link
                     current = self.current_cue
-                    if current and current.link_time > 0:
+                    if (current and current.link_time > 0
+                            and self._links_enabled):
                         link_time = current.link_time
 
                 # Marquer dirty pour l'UI
@@ -568,7 +614,7 @@ class Sequencer:
         """Appelé par le timer de link. Marque un flag pour poll_ui."""
         # Ne PAS appeler go() directement — on est sur un thread Timer
         with self._lock:
-            if self._mode == CrossfadeMode.IDLE:
+            if self._mode == CrossfadeMode.IDLE and self._links_enabled:
                 self._ui_link_pending = True
 
     # --- Sortie ---
@@ -618,7 +664,8 @@ class Sequencer:
     def record_cue(self, number: float, name: str, contents: dict[int, int],
                    fade_in: float = 3.0, fade_out: float = 3.0,
                    delay_in: float = 0.0, delay_out: float = 0.0,
-                   link_time: float = 0.0) -> Cue:
+                   link_time: float = 0.0, banger: int | None = None) -> Cue:
+        """banger=None : conserve le banger d'une cue existante."""
         existing = self.get_cue(number)
         if existing:
             existing.name = name
@@ -628,6 +675,8 @@ class Sequencer:
             existing.delay_in = delay_in
             existing.delay_out = delay_out
             existing.link_time = link_time
+            if banger is not None:
+                existing.banger = banger
             self._bus.emit("sequencer.cues_changed")
             logger.info("Cue %.1f mise à jour : '%s'", number, name)
             return existing
@@ -636,7 +685,7 @@ class Sequencer:
             number=number, name=name, contents=dict(contents),
             fade_in=fade_in, fade_out=fade_out,
             delay_in=delay_in, delay_out=delay_out,
-            link_time=link_time,
+            link_time=link_time, banger=banger or 0,
         )
         self.add_cue(cue)
         return cue

@@ -55,6 +55,7 @@ class SequencerView:
         self._rec_delay_in: int = 0
         self._rec_delay_out: int = 0
         self._rec_link_time: int = 0
+        self._rec_banger: int = 0
 
         # Widgets édition
         self._edit_cue_combo: int = 0
@@ -79,6 +80,7 @@ class SequencerView:
         self._engine.bus.on("sequencer.state_changed", self._on_state_changed)
         self._engine.bus.on("sequencer.cues_changed", self._on_cues_changed)
         self._engine.bus.on("sequencer.progress_changed", self._on_progress_changed)
+        self._engine.bus.on("bangers.changed", self._on_cues_changed)
 
     def build(self) -> int:
         self._create_themes()
@@ -242,6 +244,14 @@ class SequencerView:
             dpg.add_text("Link:", color=Colors.TEXT_SECONDARY)
             self._rec_link_time = dpg.add_input_float(
                 default_value=0.0, width=70, format="%.1f", step=0.5)
+            dpg.add_text("Banger:", color=Colors.TEXT_SECONDARY)
+            self._rec_banger = dpg.add_input_int(
+                default_value=0, width=80, min_value=0, max_value=128,
+                min_clamped=True, max_clamped=True)
+            with dpg.tooltip(dpg.last_item()):
+                dpg.add_text("Banger lance au GO vers la cue (0 = aucun).\n"
+                             "REC d'une cue existante : 0 conserve son banger.\n"
+                             "'Affecter banger' applique la valeur (0 = retirer).")
  
         # Ligne 3 : boutons REC + suppression
         with dpg.group(horizontal=True):
@@ -250,10 +260,12 @@ class SequencerView:
             dpg.add_button(label="REC (sortie DMX)",
                            callback=self._on_record_from_output)
             dpg.add_spacer(width=16)
-            dpg.add_text("Supprimer :", color=Colors.TEXT_SECONDARY)
+            dpg.add_text("Cue :", color=Colors.TEXT_SECONDARY)
             self._edit_cue_combo = dpg.add_combo(
                 items=self._get_cue_labels(), width=160, default_value="")
             dpg.add_button(label="Supprimer", callback=self._on_delete_cue)
+            dpg.add_button(label="Affecter banger",
+                           callback=self._on_assign_banger)
 
     # --- Liste des cues ---
 
@@ -286,6 +298,7 @@ class SequencerView:
                 dpg.add_button(label="Del.Out", width=70, enabled=False)
                 dpg.add_button(label="Link", width=70, enabled=False)
                 dpg.add_button(label="Circuits", width=70, enabled=False)
+                dpg.add_button(label="Banger", width=70, enabled=False)
 
             dpg.add_separator()
 
@@ -352,6 +365,21 @@ class SequencerView:
             # Nombre de circuits
             row["circuits_text"] = dpg.add_text(
                 str(len(cue.contents)), color=Colors.TEXT_SECONDARY)
+            dpg.add_spacer(width=40)
+
+            # Banger
+            if cue.banger:
+                banger = self._engine.bangers.get(cue.banger)
+                bg_str = f"B{cue.banger}"
+                bg_color = Colors.WARNING if banger else Colors.ERROR
+            else:
+                banger = None
+                bg_str, bg_color = "---", Colors.TEXT_DISABLED
+            row["banger_text"] = dpg.add_text(bg_str, color=bg_color)
+            if cue.banger:
+                with dpg.tooltip(row["banger_text"]):
+                    dpg.add_text(banger.name if banger
+                                 else "Banger inexistant")
 
         row["group"] = row_group
 
@@ -490,6 +518,7 @@ class SequencerView:
             delay_in=max(0, dpg.get_value(self._rec_delay_in)),
             delay_out=max(0, dpg.get_value(self._rec_delay_out)),
             link_time=max(0, dpg.get_value(self._rec_link_time)),
+            banger=dpg.get_value(self._rec_banger) or None,
         )
 
         # Incrémenter le numéro pour la prochaine cue
@@ -507,6 +536,18 @@ class SequencerView:
             self._engine.sequencer.delete_cue(cue_number)
         except (ValueError, IndexError):
             pass
+
+    def _on_assign_banger(self) -> None:
+        """Affecte le banger saisi à la cue sélectionnée (0 = retirer)."""
+        selected = dpg.get_value(self._edit_cue_combo)
+        if not selected:
+            return
+        try:
+            cue_number = float(selected.split(" - ")[0])
+        except (ValueError, IndexError):
+            return
+        self._engine.sequencer.update_cue(
+            cue_number, banger=int(dpg.get_value(self._rec_banger)))
 
     def _on_goto(self) -> None:
         """Saute instantanément à la cue sélectionnée."""
@@ -551,7 +592,8 @@ class SequencerView:
             return
 
         # Vérifier qu'on n'est pas dans un champ de saisie
-        for widget in (self._rec_name_input, self._rec_number_input):
+        for widget in (self._rec_name_input, self._rec_number_input,
+                       self._rec_banger):
             if widget and (dpg.is_item_active(widget) or dpg.is_item_focused(widget)):
                 return
 

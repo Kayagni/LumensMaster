@@ -22,6 +22,7 @@ from lumensmaster.core.config import AppConfig
 from lumensmaster.core.dmx import DMXBuffer, DMXOutput, DMXOutputDummy
 from lumensmaster.core.events import EventBus
 from lumensmaster.core.show import load_show, new_show, save_show
+from lumensmaster.modules.bangers import BangerManager
 from lumensmaster.modules.faders import Faders
 from lumensmaster.modules.grand_master import GrandMaster
 from lumensmaster.modules.patch import Patch
@@ -68,6 +69,9 @@ class Engine:
         self.sequencer.set_dmx_callback(self.update_dmx)
         self.color_manager = ColorManager(self.bus)
         self.color_manager.set_circuit_callback(self._set_circuit_for_color)
+        # Bangers : pilotent faders, circuits et séquenceur (thread principal)
+        self.bangers = BangerManager(self.bus)
+        self.bangers.attach(self.faders, self.circuits, self.sequencer)
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -81,6 +85,7 @@ class Engine:
         self.bus.on("grandmaster.changed", self._on_grandmaster_changed)
         self.bus.on("patch.updated", self._on_patch_updated)
         self.bus.on("circuit.changed", self._on_circuit_changed)
+        self.bus.on("bangers.changed", self._on_bangers_changed)
         
 
     @property
@@ -180,6 +185,9 @@ class Engine:
     def _on_circuit_changed(self, **kwargs):
         self._dirty = True
         self.update_dmx()
+
+    def _on_bangers_changed(self, **kwargs: Any) -> None:
+        self._dirty = True
 
     # --- Connexion DMX ---
 
@@ -305,7 +313,10 @@ class Engine:
         self.update_dmx()
         self.sequencer.from_dict({})
         self.color_manager.from_dict({})
+        self.bangers.clear()
         self.sequencer.ensure_default_cue()
+        # Les resets ci-dessus émettent des événements qui marquent dirty
+        self._dirty = False
 
         self.bus.emit("show.loaded")
         logger.info("Nouveau show créé")
@@ -329,6 +340,7 @@ class Engine:
         self._show_data["grandmaster"] = self.grand_master.level
         self._show_data["sequencer"] = self.sequencer.to_dict()
         self._show_data["trichromie"] = self.color_manager.to_dict()
+        self._show_data["bangers"] = self.bangers.to_dict()
 
         if save_show(self._show_data, save_path):
             self._show_path = save_path
@@ -360,8 +372,10 @@ class Engine:
         self.grand_master.level = data.get("grandmaster", 255)
         self.sequencer.from_dict(data.get("sequencer", {}))
         self.color_manager.from_dict(data.get("trichromie", {}))
+        self.bangers.from_dict(data.get("bangers", {}))
 
         self.update_dmx()
+        self._dirty = False
         self.config.last_show_path = path
         self.bus.emit("show.loaded")
         logger.info("Show chargé : %s", path)

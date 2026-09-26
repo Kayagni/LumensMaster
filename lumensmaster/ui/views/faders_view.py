@@ -86,6 +86,8 @@ class FadersView:
 
         self._updating_layout = False
         self._engine.bus.on("fader.contents_changed", self._on_fader_contents_changed)
+        # Niveau modifié hors de la vue (bangers…) : resynchroniser le slider
+        self._engine.bus.on("fader.changed", self._on_fader_level_changed)
 
     def build(self) -> int:
         self._create_themes()
@@ -395,6 +397,10 @@ class FadersView:
                 
     def _on_fader_contents_changed(self, fader_id: int = 0, **kwargs) -> None:
         """Appelé quand le contenu d'un fader change (ex: REC depuis circuits)."""
+        if fader_id > 0:
+            self._update_fader_display(fader_id)
+
+    def _on_fader_level_changed(self, fader_id: int = 0, **kwargs) -> None:
         if fader_id > 0:
             self._update_fader_display(fader_id)
 

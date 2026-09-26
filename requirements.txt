@@ -11,3 +11,4 @@ pyserial>=3.5
 # python-rtmidi     # MIDI (Phase 3)
 # miniaudio         # Audio (Phase 3)
 # pyinstaller       # Distribution .exe
+# Tests (développement) : pip install pytest  puis  python -m pytest tests
