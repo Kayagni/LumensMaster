@@ -7,8 +7,12 @@ dearpygui>=1.11
 # DMX / Port série (OpenDMX via FTDI)
 pyserial>=3.5
 
+# Audio (sortie + décodage wav/mp3/flac/ogg ; mixage numpy)
+# miniaudio épinglé : audio.py utilise son API bas niveau (ffi/lib)
+miniaudio==1.71
+numpy>=2.0
+
 # Les dépendances suivantes seront ajoutées dans les phases ultérieures :
 # python-rtmidi     # MIDI (Phase 3)
-# miniaudio         # Audio (Phase 3)
 # pyinstaller       # Distribution .exe
 # Tests (développement) : pip install pytest  puis  python -m pytest tests

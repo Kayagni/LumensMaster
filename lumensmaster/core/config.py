@@ -34,10 +34,17 @@ class UIConfig:
 
 
 @dataclass
+class AudioConfig:
+    """Configuration de la sortie audio."""
+    buffer_ms: int = 60  # latence de sortie ; augmenter en cas de craquements
+
+
+@dataclass
 class AppConfig:
     """Configuration principale de l'application."""
     dmx: DMXConfig = field(default_factory=DMXConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     last_show_path: str = ""
     last_workspace_profile: str = "Défaut"
     workspace_profiles: dict = field(default_factory=dict)
@@ -67,6 +74,7 @@ class AppConfig:
                 data = json.load(f)
             config.dmx = DMXConfig(**data.get("dmx", {}))
             config.ui = UIConfig(**data.get("ui", {}))
+            config.audio = AudioConfig(**data.get("audio", {}))
             config.last_show_path = data.get("last_show_path", "")
             config.last_workspace_profile = data.get("last_workspace_profile", "Défaut")
             config.workspace_profiles = data.get("workspace_profiles", {})

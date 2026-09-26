@@ -144,6 +144,7 @@ class ActionParam:
     Description d'un paramètre d'action (sert aussi à générer l'UI).
 
     kind : "int" | "float" | "choice" | "cue" | "banger" | "fader" | "circuit"
+           | "player" | "sound" | "file" (id de fichier de la bibliothèque audio)
     """
     key: str
     label: str
@@ -179,7 +180,8 @@ class ActionSpec:
         for p in self.params:
             value = raw.get(p.key, p.default)
             try:
-                if p.kind in ("int", "banger", "fader", "circuit"):
+                if p.kind in ("int", "banger", "fader", "circuit",
+                              "player", "sound", "file"):
                     value = int(value)
                 elif p.kind in ("float", "cue"):
                     value = float(value)
@@ -223,6 +225,11 @@ def actions_for(family: str) -> list[ActionSpec]:
     return [s for (f, _), s in ACTIONS.items() if f == family]
 
 
+# Formatage lisible de certains types de paramètres, enregistré par les
+# modules qui en connaissent le sens (ex. audio : id de fichier -> nom).
+PARAM_FORMATTERS: dict[str, Callable[[Any], str]] = {}
+
+
 def describe_event(event: BangerEvent) -> str:
     """Résumé lisible d'un événement (liste, tooltips)."""
     spec = get_action(event.family, event.action)
@@ -236,6 +243,11 @@ def describe_event(event: BangerEvent) -> str:
             v = dict(p.choices).get(v, v)
         elif p.kind == "cue":
             v = f"{v:.1f}"
+        elif p.kind in PARAM_FORMATTERS:
+            try:
+                v = PARAM_FORMATTERS[p.kind](v)
+            except Exception:
+                pass
         parts.append(f"{p.label} {v}")
     fam = FAMILIES.get(spec.family, spec.family)
     return f"{fam} : {spec.label}" + (f" ({', '.join(parts)})" if parts else "")
@@ -322,7 +334,7 @@ register_action(ActionSpec(
     lambda m, p: _circuit_apply(m, p, "add"), _circuits_restore,
     wc_codes=[(11, 1), (11, 4)]))
 register_action(ActionSpec(
-    "circuits", "sub", "Circuit −", _CIRCUIT_PARAMS,
+    "circuits", "sub", "Circuit -", _CIRCUIT_PARAMS,
     lambda m, p: _circuit_apply(m, p, "sub"), _circuits_restore,
     wc_codes=[(11, 2), (11, 5)]))
 

@@ -15,6 +15,7 @@ from lumensmaster import __app_name__, __version__
 from lumensmaster.core.engine import Engine
 from lumensmaster.ui.theme import Colors, apply_theme
 from lumensmaster.ui.icons import get_icon_manager
+from lumensmaster.ui.views.audio_view import AudioView
 from lumensmaster.ui.views.bangers_view import BangersView
 from lumensmaster.ui.views.circuits_view import CircuitsView
 from lumensmaster.ui.views.faders_view import FadersView
@@ -35,6 +36,7 @@ class App:
         self._sequencer_view: SequencerView | None = None
         self._trichromie_view: TrichromieView | None = None
         self._bangers_view: BangersView | None = None
+        self._audio_view: AudioView | None = None
         self._file_dialog_save: int = 0
         self._file_dialog_open: int = 0
         self._show_name_input: int = 0
@@ -78,6 +80,7 @@ class App:
                 self._engine.sequencer.poll_ui()
                 # Bangers : ordonnanceur sur le thread principal (~1 frame)
                 self._engine.bangers.poll()
+                self._engine.audio.poll_ui()
                 dpg.render_dearpygui_frame()
         finally:
             # Sauvegarder la disposition courante dans le dernier profil utilisé
@@ -115,6 +118,9 @@ class App:
 
         self._bangers_view = BangersView(self._engine)
         self._bangers_view.build()
+
+        self._audio_view = AudioView(self._engine)
+        self._audio_view.build()
 
         # File dialogs (créés au niveau racine, pas dans une fenêtre)
         with dpg.file_dialog(
@@ -194,6 +200,7 @@ class App:
             dpg.add_button(label="Sequenceur", callback=self._toggle_sequencer_window)
             dpg.add_button(label="Trichromie", callback=self._toggle_trichromie_window)
             dpg.add_button(label="Bangers", callback=self._toggle_bangers_window)
+            dpg.add_button(label="Audio", callback=self._toggle_audio_window)
 
             dpg.add_spacer(width=24)
 
@@ -363,6 +370,11 @@ class App:
         if self._bangers_view:
             self._bangers_view.toggle()
 
+    def _toggle_audio_window(self) -> None:
+        """Affiche ou masque la fenêtre Audio."""
+        if self._audio_view:
+            self._audio_view.toggle()
+
     # --- Mise à jour statut ---
 
     def _update_status_dmx(self, text: str, color: tuple = Colors.TEXT_SECONDARY) -> None:
@@ -405,6 +417,8 @@ class App:
             profile["sequencer"] = self._sequencer_view.get_layout_state()
         if self._bangers_view:
             profile["bangers"] = self._bangers_view.get_layout_state()
+        if self._audio_view:
+            profile["audio"] = self._audio_view.get_layout_state()
         return profile
 
     def _apply_profile(self, profile: dict) -> None:
@@ -432,6 +446,12 @@ class App:
             self._bangers_view.apply_layout_state(profile["bangers"])
         elif self._bangers_view and dpg.does_item_exist(self._bangers_view._window_id):
             dpg.configure_item(self._bangers_view._window_id, show=False)
+
+        # Audio
+        if "audio" in profile and self._audio_view:
+            self._audio_view.apply_layout_state(profile["audio"])
+        elif self._audio_view and dpg.does_item_exist(self._audio_view._window_id):
+            dpg.configure_item(self._audio_view._window_id, show=False)
 
     def _on_profile_selected(self, sender: int, value: str) -> None:
         """Sélection d'un profil dans le combo (ne charge pas automatiquement)."""

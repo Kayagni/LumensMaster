@@ -22,6 +22,7 @@ from lumensmaster.core.config import AppConfig
 from lumensmaster.core.dmx import DMXBuffer, DMXOutput, DMXOutputDummy
 from lumensmaster.core.events import EventBus
 from lumensmaster.core.show import load_show, new_show, save_show
+from lumensmaster.modules.audio import AudioManager
 from lumensmaster.modules.bangers import BangerManager
 from lumensmaster.modules.faders import Faders
 from lumensmaster.modules.grand_master import GrandMaster
@@ -72,6 +73,9 @@ class Engine:
         # Bangers : pilotent faders, circuits et séquenceur (thread principal)
         self.bangers = BangerManager(self.bus)
         self.bangers.attach(self.faders, self.circuits, self.sequencer)
+        # Audio : lecteurs + sons directs (mixeur miniaudio/numpy)
+        self.audio = AudioManager(self.bus)
+        self.bangers.audio = self.audio
 
         # État du show
         self._show_data: dict[str, Any] = new_show()
@@ -86,6 +90,7 @@ class Engine:
         self.bus.on("patch.updated", self._on_patch_updated)
         self.bus.on("circuit.changed", self._on_circuit_changed)
         self.bus.on("bangers.changed", self._on_bangers_changed)
+        self.bus.on("audio.changed", self._on_bangers_changed)
         
 
     @property
@@ -116,6 +121,8 @@ class Engine:
             # via le bouton Connecter dans l'UI
 
         self.dmx_output.start()
+        if not self.audio.start(self.config.audio.buffer_ms):
+            logger.warning("Audio indisponible : le show fonctionne sans son")
         self.bus.emit("engine.started")
         self.sequencer.ensure_default_cue()
         logger.info("Moteur LumensMaster démarré")
@@ -126,6 +133,7 @@ class Engine:
             self.dmx_output.stop()
 
         self.sequencer.stop()
+        self.audio.stop()
         self.bus.emit("engine.stopped")
         self.bus.clear()
         logger.info("Moteur LumensMaster arrêté")
@@ -314,6 +322,7 @@ class Engine:
         self.sequencer.from_dict({})
         self.color_manager.from_dict({})
         self.bangers.clear()
+        self.audio.clear()
         self.sequencer.ensure_default_cue()
         # Les resets ci-dessus émettent des événements qui marquent dirty
         self._dirty = False
@@ -341,6 +350,8 @@ class Engine:
         self._show_data["sequencer"] = self.sequencer.to_dict()
         self._show_data["trichromie"] = self.color_manager.to_dict()
         self._show_data["bangers"] = self.bangers.to_dict()
+        self._show_data["audio"] = self.audio.to_dict(
+            base_dir=Path(save_path).resolve().parent)
 
         if save_show(self._show_data, save_path):
             self._show_path = save_path
@@ -373,6 +384,8 @@ class Engine:
         self.sequencer.from_dict(data.get("sequencer", {}))
         self.color_manager.from_dict(data.get("trichromie", {}))
         self.bangers.from_dict(data.get("bangers", {}))
+        self.audio.from_dict(data.get("audio", {}),
+                             base_dir=Path(path).resolve().parent)
 
         self.update_dmx()
         self._dirty = False

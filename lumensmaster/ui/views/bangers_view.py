@@ -72,6 +72,7 @@ class BangersView:
         bus.on("banger.event_fired", self._on_event_fired)
         bus.on("bangers.enabled_changed", self._on_enabled_changed)
         bus.on("show.loaded", self._on_show_loaded)
+        bus.on("audio.changed", self._on_audio_changed)
 
     # ------------------------------------------------------------------
     #  Construction
@@ -277,6 +278,13 @@ class BangersView:
             current = dict(p.choices).get(value, labels[0] if labels else "")
             dpg.add_combo(items=labels, default_value=current, width=90,
                           callback=self._on_param_choice, user_data=user_data)
+        elif p.kind == "file":
+            audio = getattr(self._engine, "audio", None)
+            files = audio.files if audio else []
+            labels = [f"{f.id} - {f.name}" for f in files]
+            current = next((l for f, l in zip(files, labels) if f.id == value), "")
+            dpg.add_combo(items=labels, default_value=current, width=180,
+                          callback=self._on_param_file, user_data=user_data)
         elif p.kind in ("float", "cue"):
             kwargs: dict[str, Any] = {}
             if p.min_value is not None:
@@ -301,6 +309,11 @@ class BangersView:
                 target = self._mgr.get(int(value))
                 with dpg.tooltip(dpg.last_item()):
                     dpg.add_text(target.name if target else "(banger inexistant)")
+            elif p.kind == "sound":
+                audio = getattr(self._engine, "audio", None)
+                snd = audio.get_sound(int(value)) if audio else None
+                with dpg.tooltip(dpg.last_item()):
+                    dpg.add_text(snd.name if snd else "(son inexistant)")
 
     def _update_status(self) -> None:
         if not self._status_text or not dpg.does_item_exist(self._status_text):
@@ -407,6 +420,15 @@ class BangersView:
         self._edit(self._mgr.update_event, self._selected, idx,
                    params={p.key: value})
 
+    def _on_param_file(self, sender: int, value: str, user_data: tuple) -> None:
+        idx, p = user_data
+        try:
+            file_id = int(value.split(" - ")[0])
+        except (ValueError, IndexError):
+            return
+        self._edit(self._mgr.update_event, self._selected, idx,
+                   params={p.key: file_id})
+
     def _on_param_choice(self, sender: int, value: str, user_data: tuple) -> None:
         idx, p = user_data
         for key, label in p.choices:
@@ -434,6 +456,13 @@ class BangersView:
         self._rebuild_grid()
         if not self._suppress_rebuild:
             self._rebuild_editor()
+
+    def _on_audio_changed(self, structural: bool = True, **kwargs: Any) -> None:
+        """Bibliothèque ou sons modifiés : listes de fichiers / noms à jour."""
+        if structural and self._window_id and dpg.does_item_exist(self._window_id):
+            self._rebuild_grid()
+            if not self._suppress_rebuild:
+                self._rebuild_editor()
 
     def _on_state_changed(self, number: int = 0, **kwargs: Any) -> None:
         self._apply_button_theme(number)
